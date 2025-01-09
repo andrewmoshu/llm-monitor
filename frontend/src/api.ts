@@ -1,7 +1,11 @@
 import axios from 'axios';
 import { LatencyRecord } from './types/types';
 
-const API_BASE_URL = 'http://localhost:8000/api';
+// In development, use localhost
+// In production (kubernetes), the nginx config will handle the proxy
+const API_BASE_URL = process.env.NODE_ENV === 'production' 
+  ? '/api'  // This will be proxied through nginx
+  : 'http://localhost:8000/api';
 
 export const api = {
   getLatencyData: async (): Promise<LatencyRecord[]> => {
