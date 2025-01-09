@@ -2,9 +2,9 @@ import axios from 'axios';
 import { LatencyRecord } from './types/types';
 
 // In development, use localhost
-// In production (kubernetes), the nginx config will handle the proxy
+// In production, use the relative path (Ingress will handle routing)
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? '/api'  // This will be proxied through nginx
+  ? '/api'  // Ingress will route this appropriately
   : 'http://localhost:8000/api';
 
 export const api = {

@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 import logging
 from llm_manager import LLMManager, MODEL_CONFIGS
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 MONITOR_INTERVAL = 60  # 1 minute in seconds
 TEST_INPUT_TOKENS = 500
-API_ENDPOINT = "http://localhost:8000/api/latency"
+API_ENDPOINT = os.getenv('API_ENDPOINT', 'http://backend-service:8000/api/latency')
 
 # Create a test prompt with approximately 500 tokens
 TEST_PROMPT = """You are tasked with explaining a complex topic in a clear and concise manner. 

@@ -13,10 +13,14 @@ import os
 
 app = FastAPI()
 
-# Enable CORS
+# Enable CORS with more specific configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your Angular app's URL
+    allow_origins=[
+        "http://localhost:3000",           # Development
+        "http://llm-monitor.local",        # Production domain
+        "https://llm-monitor.local"        # If using HTTPS
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

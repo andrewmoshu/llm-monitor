@@ -1,1 +1,37 @@
- 
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: latency-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: latency-monitor
+  template:
+    metadata:
+      labels:
+        app: latency-monitor
+    spec:
+      containers:
+      - name: latency-monitor
+        image: llm-monitor-latency:latest
+        env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-keys
+              key: openai-api-key
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-keys
+              key: anthropic-api-key
+        - name: API_ENDPOINT
+          value: "http://backend-service.default.svc.cluster.local:8000/api/latency"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m" 
