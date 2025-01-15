@@ -27,7 +27,7 @@ spec:
               name: api-keys
               key: anthropic-api-key
         - name: API_ENDPOINT
-          value: "http://backend-service.default.svc.cluster.local:8000/api/latency"
+          value: "http://backend-service:8000/api/latency"
         resources:
           requests:
             memory: "256Mi"

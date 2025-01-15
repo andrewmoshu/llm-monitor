@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    # environment:
+    #   - NODE_ENV=production
+    networks:
+      - llm-monitor-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    networks:
+      - llm-monitor-network
+
+  latency-monitor:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.monitor
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - API_HOST=backend
+      - API_PORT=8000
+    depends_on:
+      - backend
+    networks:
+      - llm-monitor-network
+
+networks:
+  llm-monitor-network:
+    driver: bridge

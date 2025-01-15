@@ -10,27 +10,37 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Set production environment
+# Set production environment and build
 ENV NODE_ENV=production
-
-# Build the application
+ENV PUBLIC_URL=/
 RUN npm run build
 
 # Production stage
 FROM nginx:alpine
 
-# Copy custom nginx config
+# Create necessary directories and set permissions
+RUN mkdir -p /var/cache/nginx /var/run \
+    && chown -R nginx:nginx /var/cache/nginx \
+    && chown -R nginx:nginx /var/run \
+    && chown -R nginx:nginx /var/log/nginx \
+    && touch /var/run/nginx.pid \
+    && chown -R nginx:nginx /var/run/nginx.pid
+
+# Copy nginx config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Copy built assets from builder stage
 COPY --from=build /app/build /usr/share/nginx/html
 
-# Add nginx user
-RUN chown -R nginx:nginx /usr/share/nginx/html && \
-    chmod -R 755 /usr/share/nginx/html && \
-    chown -R nginx:nginx /var/cache/nginx && \
-    chown -R nginx:nginx /var/log/nginx && \
-    chown -R nginx:nginx /etc/nginx/conf.d
+# Set permissions for nginx html directory
+RUN chown -R nginx:nginx /usr/share/nginx/html \
+    && chmod -R 755 /usr/share/nginx/html \
+    && chown -R nginx:nginx /etc/nginx/conf.d
+
+# Update nginx main configuration
+RUN sed -i 's/user  nginx;//g' /etc/nginx/nginx.conf \
+    && sed -i 's/user  nginx nginx;//g' /etc/nginx/nginx.conf \
+    && sed -i 's/user  root root;//g' /etc/nginx/nginx.conf
 
 # Switch to non-root user
 USER nginx

@@ -1,20 +1,35 @@
 import axios from 'axios';
 import { LatencyRecord } from './types/types';
 
-// In development, use localhost
-// In production, use the relative path (Ingress will handle routing)
+// Base URL configuration
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? '/api'  // Ingress will route this appropriately
-  : 'http://localhost:8000/api';
+  ? `${window.location.origin}/api`
+  : 'http://localhost:8001/api';
+
+// Add request interceptor for debugging
+axios.interceptors.request.use(request => {
+  console.log('API Request:', request.url);
+  return request;
+});
 
 export const api = {
   getLatencyData: async (): Promise<LatencyRecord[]> => {
-    const response = await axios.get(`${API_BASE_URL}/latency`);
-    return response.data;
+    try {
+      const response = await axios.get(`${API_BASE_URL}/latency`);
+      return Array.isArray(response.data) ? response.data : [];
+    } catch (error) {
+      console.error('API Error:', error);
+      return [];
+    }
   },
 
   getModels: async (): Promise<string[]> => {
-    const response = await axios.get(`${API_BASE_URL}/models`);
-    return response.data;
+    try {
+      const response = await axios.get(`${API_BASE_URL}/models`);
+      return Array.isArray(response.data) ? response.data : [];
+    } catch (error) {
+      console.error('API Error:', error);
+      return [];
+    }
   }
 }; 

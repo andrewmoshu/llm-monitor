@@ -6,6 +6,7 @@ import json
 import logging
 from llm_manager import LLMManager, MODEL_CONFIGS
 import os
+import ssl
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -13,7 +14,8 @@ logger = logging.getLogger(__name__)
 # Configuration
 MONITOR_INTERVAL = 60  # 1 minute in seconds
 TEST_INPUT_TOKENS = 500
-API_ENDPOINT = os.getenv('API_ENDPOINT', 'http://backend-service:8000/api/latency')
+API_ENDPOINT = 'http://localhost:8001/api/latency'
+TIMEOUT = aiohttp.ClientTimeout(total=5)  # 5 seconds timeout
 
 # Create a test prompt with approximately 500 tokens
 TEST_PROMPT = """You are tasked with explaining a complex topic in a clear and concise manner. 
@@ -58,12 +60,11 @@ Focus on practical applications and real-world implementations rather than theor
 Consider both advantages and limitations of current quantum computing systems."""
 
 async def measure_latency(session, model_name: str, llm_manager: LLMManager):
-    """
-    Measure latency for a specific model using the LLMManager.
-    """
+    """Measure latency for a specific model using the LLMManager."""
     try:
         # Get latency metrics from LLMManager
         metrics = await llm_manager.measure_latency(model_name, TEST_PROMPT)
+        logger.info(f"Got metrics for {model_name}: {metrics}")
         
         # Prepare data for API
         data = {
@@ -75,15 +76,43 @@ async def measure_latency(session, model_name: str, llm_manager: LLMManager):
             "cost": metrics["cost"],
             "arena_score": metrics["arena_score"],
             "context_window": metrics["context_window"],
-            "is_cloud": metrics["is_cloud"]
+            "is_cloud": True
         }
         
-        # Send data to API
-        async with session.post(API_ENDPOINT, json=data) as response:
-            if response.status != 200:
-                logger.error(f"Failed to send data for {model_name}: {await response.text()}")
-            else:
-                logger.info(f"Successfully recorded latency for {model_name}: {metrics['latency_ms']:.2f}ms")
+        # Send data to API with retries
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Sending data to {API_ENDPOINT} (attempt {attempt + 1})")
+                async with session.post(
+                    API_ENDPOINT, 
+                    json=data,
+                    timeout=TIMEOUT,
+                    headers={'Content-Type': 'application/json'}
+                ) as response:
+                    if response.status != 200:
+                        response_text = await response.text()
+                        logger.error(f"Failed to send data: Status {response.status}, Response: {response_text}")
+                    else:
+                        response_data = await response.json()
+                        logger.info(f"Successfully recorded latency: {metrics['latency_ms']:.2f}ms")
+                        return
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout on attempt {attempt + 1}")
+                if attempt == max_retries - 1:
+                    raise
+            except aiohttp.ClientError as e:
+                logger.error(f"Network error on attempt {attempt + 1}: {str(e)}")
+                if attempt == max_retries - 1:
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error on attempt {attempt + 1}: {str(e)}")
+                if attempt == max_retries - 1:
+                    raise
+            
+            # Wait before retry
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1)
                 
     except Exception as e:
         logger.error(f"Error measuring latency for {model_name}: {str(e)}")
@@ -94,18 +123,34 @@ async def monitor_latencies():
     
     # Get supported models
     models = llm_manager.get_supported_models()
-    logger.info(f"Monitoring latency for models: {', '.join(models)}")
+    logger.info(f"Starting monitoring for models: {', '.join(models)}")
     
-    async with aiohttp.ClientSession() as session:
+    # Configure client session with timeout
+    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
         while True:
-            tasks = []
-            for model in models:
-                task = measure_latency(session, model, llm_manager)
-                tasks.append(task)
-            
-            await asyncio.gather(*tasks)
-            logger.info(f"Completed latency measurements. Waiting {MONITOR_INTERVAL} seconds...")
-            await asyncio.sleep(MONITOR_INTERVAL)
+            try:
+                tasks = []
+                logger.info(f"Running latency checks for models: {', '.join(models)}")
+                for model in models:
+                    # Create proper asyncio tasks
+                    task = asyncio.create_task(measure_latency(session, model, llm_manager))
+                    tasks.append(task)
+                
+                # Use wait instead of gather to handle individual task failures
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
+                
+                # Handle results and exceptions
+                for task in done:
+                    try:
+                        await task
+                    except Exception as e:
+                        logger.error(f"Task failed with error: {str(e)}")
+                
+                logger.info(f"Completed latency measurements. Waiting {MONITOR_INTERVAL} seconds...")
+                await asyncio.sleep(MONITOR_INTERVAL)
+            except Exception as e:
+                logger.error(f"Error in monitoring loop: {str(e)}")
+                await asyncio.sleep(5)  # Wait a bit before retrying
 
 if __name__ == "__main__":
     logger.info("Starting LLM Latency Monitor...")

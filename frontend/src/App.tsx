@@ -26,6 +26,10 @@ import { api } from './api';
 import { LatencyRecord } from './types/types';
 import './App.css';
 
+const API_BASE = process.env.NODE_ENV === 'production' 
+  ? window.location.origin + '/api'  // This will work with both Ingress and docker-compose
+  : 'http://localhost:8000/api';
+
 function App() {
   const [latencyData, setLatencyData] = useState<LatencyRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,26 +71,34 @@ function App() {
     const fetchData = async () => {
       try {
         const data = await api.getLatencyData();
-        console.log('Received data:', data);
+        console.log('Fetched data:', data.length, 'records');
+        if (data.length > 0) {
+          console.log('Latest timestamp:', new Date(data[data.length - 1].timestamp).toISOString());
+        }
         setLatencyData(data);
         setLoading(false);
       } catch (err) {
-        setError('Failed to fetch data');
+        console.error('Error fetching data:', err);
+        setError(err instanceof Error ? err.message : 'Failed to fetch data');
+        setLatencyData([]);
         setLoading(false);
       }
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 10000);
+    // Fetch every 5 seconds for more real-time updates
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
 
   const getStats = () => {
-    if (!latencyData.length) return { 
-      models: 0, 
-      cloudLatency: 0,
-      onPremLatency: 0 
-    };
+    if (!Array.isArray(latencyData) || !latencyData.length) {
+      return { 
+        models: 0, 
+        cloudLatency: 0,
+        onPremLatency: 0 
+      };
+    }
     
     const uniqueModels = new Set(latencyData.map(d => d.model_name));
     

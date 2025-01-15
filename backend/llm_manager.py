@@ -20,26 +20,26 @@ MAX_OUTPUT_TOKENS = 500
 
 # Add context window sizes to your model configurations
 MODEL_CONFIGS = {
-    'gpt-3.5-turbo': {
-        'context_window': 16385,
-        'pricing': {'input': 0.0015, 'output': 0.002},
-        'is_cloud': True
-    },
-    'gpt-4': {
-        'context_window': 8192,
-        'pricing': {'input': 0.03, 'output': 0.06},
-        'is_cloud': True
-    },
-    'gpt-4o-mini': {
+        'gpt-4o-mini': {
         'context_window': 8192,
         'pricing': {'input': 0.01, 'output': 0.03},
         'is_cloud': True
-    },
-    'claude-3-sonnet-20240229': {
-        'context_window': 200000,
-        'pricing': {'input': 0.015, 'output': 0.075},
-        'is_cloud': True
     }
+    # 'gpt-3.5-turbo': {
+    #     'context_window': 16385,
+    #     'pricing': {'input': 0.0015, 'output': 0.002},
+    #     'is_cloud': True
+    # },
+    # 'gpt-4': {
+    #     'context_window': 8192,
+    #     'pricing': {'input': 0.03, 'output': 0.06},
+    #     'is_cloud': True
+    # },
+    # 'claude-3-sonnet-20240229': {
+    #     'context_window': 200000,
+    #     'pricing': {'input': 0.015, 'output': 0.075},
+    #     'is_cloud': True
+    # }
 }
 
 class LLMManager:
@@ -53,43 +53,43 @@ class LLMManager:
         
         # Initialize OpenAI models through LangChain
         self.openai_models = {
-            "gpt-4": ChatOpenAI(
-                model_name="gpt-4",
-                temperature=0,
-                max_tokens=MAX_OUTPUT_TOKENS,
-                openai_api_key=os.getenv("OPENAI_API_KEY")
-            ),
             "gpt-4o-mini": ChatOpenAI(
                 model_name="gpt-4o-mini",
                 temperature=0,
                 max_tokens=MAX_OUTPUT_TOKENS,
                 openai_api_key=os.getenv("OPENAI_API_KEY")
-            ),
-            "gpt-3.5-turbo": ChatOpenAI(
-                model_name="gpt-3.5-turbo",
-                temperature=0,
-                max_tokens=MAX_OUTPUT_TOKENS,
-                openai_api_key=os.getenv("OPENAI_API_KEY")
-            ),
+            )
+            # "gpt-4": ChatOpenAI(
+            #     model_name="gpt-4",
+            #     temperature=0,
+            #     max_tokens=MAX_OUTPUT_TOKENS,
+            #     openai_api_key=os.getenv("OPENAI_API_KEY")
+            # ),
+            # "gpt-3.5-turbo": ChatOpenAI(
+            #     model_name="gpt-3.5-turbo",
+            #     temperature=0,
+            #     max_tokens=MAX_OUTPUT_TOKENS,
+            #     openai_api_key=os.getenv("OPENAI_API_KEY")
+            # ),
         }
         
         # Define supported Anthropic models
-        self.anthropic_models = ["claude-3-sonnet-20240229"]
+        # self.anthropic_models = [""]
         
         # Initialize tokenizers
         self.tokenizers = {
-            "gpt-4": tiktoken.encoding_for_model("gpt-4"),
+            # "gpt-4": tiktoken.encoding_for_model("gpt-4"),
             "gpt-4o-mini": tiktoken.encoding_for_model("gpt-4"),  # Uses same tokenizer as GPT-4
-            "gpt-3.5-turbo": tiktoken.encoding_for_model("gpt-3.5-turbo"),
-            "claude-3-sonnet-20240229": tiktoken.encoding_for_model("gpt-4")  # Approximation
+            # "gpt-3.5-turbo": tiktoken.encoding_for_model("gpt-3.5-turbo"),
+            # "claude-3-sonnet-20240229": tiktoken.encoding_for_model("gpt-4")  # Approximation
         }
         
         # Cache for arena scores
         self.arena_scores = {
-            "gpt-4": 1250,
+            # "gpt-4": 1250,
             "gpt-4o-mini": 1274,
-            "gpt-3.5-turbo": 1068,
-            "claude-3-sonnet-20240229": 1268
+            # "gpt-3.5-turbo": 1068,
+            # "claude-3-sonnet-20240229": 1268
         }
 
     async def initialize_model_info(self):
@@ -97,30 +97,30 @@ class LLMManager:
         try:
             # Pricing information (per 1K tokens)
             pricing_info = {
-                "gpt-4": {
-                    "input": 0.03,
-                    "output": 0.06,
-                    "context_window": 8192,
-                    "training_data": "Up to 2023-04"
-                },
+                # "gpt-4": {
+                #     "input": 0.03,
+                #     "output": 0.06,
+                #     "context_window": 8192,
+                #     "training_data": "Up to 2023-04"
+                # },
                 "gpt-4o-mini": {
                     "input": 0.01,
                     "output": 0.03,
                     "context_window": 128000,
                     "training_data": "Up to 2024-01"
                 },
-                "gpt-3.5-turbo": {
-                    "input": 0.001,
-                    "output": 0.002,
-                    "context_window": 16385,
-                    "training_data": "Up to 2023-09"
-                },
-                "claude-3-sonnet-20240229": {
-                    "input": 0.003,
-                    "output": 0.015,
-                    "context_window": 200000,
-                    "training_data": "Up to 2024-02"
-                }
+                # "gpt-3.5-turbo": {
+                #     "input": 0.001,
+                #     "output": 0.002,
+                #     "context_window": 16385,
+                #     "training_data": "Up to 2023-09"
+                # },
+                # "claude-3-sonnet-20240229": {
+                #     "input": 0.003,
+                #     "output": 0.015,
+                #     "context_window": 200000,
+                #     "training_data": "Up to 2024-02"
+                # }
             }
 
             # Fetch OpenAI models
@@ -200,8 +200,8 @@ class LLMManager:
             
             if model_name in self.openai_models:
                 response = await self._call_openai_model(model_name, prompt)
-            elif model_name in self.anthropic_models:
-                response = await self._call_anthropic_model(model_name, prompt)
+            # elif model_name in self.anthropic_models:
+            #     response = await self._call_anthropic_model(model_name, prompt)
             else:
                 raise ValueError(f"Unsupported model: {model_name}")
             
@@ -236,7 +236,7 @@ class LLMManager:
 
     def get_supported_models(self):
         """Return list of supported models"""
-        return list(self.openai_models.keys()) + self.anthropic_models
+        return list(self.openai_models.keys())
 
     async def get_model_info(self, model_name: str) -> Dict:
         """Get detailed information about a specific model."""
