@@ -23,16 +23,22 @@ import QueryStatsIcon from '@mui/icons-material/QueryStats';
 import LatencyGraph from './components/LatencyGraph';
 import LatencyTable from './components/LatencyTable';
 import { api } from './api';
-import { LatencyRecord } from './types/types';
+import { LatencyRecord, ModelInfo } from './types/types';
 import './App.css';
+import StatCard from './components/StatCard';
 
-const API_BASE = process.env.NODE_ENV === 'production' 
-  ? window.location.origin + '/api'  // This will work with both Ingress and docker-compose
-  : 'http://localhost:8000/api';
+const API_BASE = 'http://localhost:8001/api';
+
+// Assume the backend monitor interval is 60 seconds for calculation
+const MONITOR_INTERVAL_MS = 60 * 1000;
+// Tolerance window around the latest timestamp (e.g., half the interval)
+const TIMESTAMP_TOLERANCE_MS = MONITOR_INTERVAL_MS / 2;
 
 function App() {
   const [latencyData, setLatencyData] = useState<LatencyRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [modelInfo, setModelInfo] = useState<{ [key: string]: ModelInfo }>({});
+  const [loading, setLoading] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(false);
 
@@ -68,60 +74,103 @@ function App() {
   });
 
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchData = async (isInitialLoad = false) => {
+      if (isInitialLoad) {
+        setLoading(true);
+      } else {
+        setIsRefreshing(true);
+      }
+      setError(null);
+
       try {
-        const data = await api.getLatencyData();
-        console.log('Fetched data:', data.length, 'records');
-        if (data.length > 0) {
-          console.log('Latest timestamp:', new Date(data[data.length - 1].timestamp).toISOString());
+        const [latencyJson, modelsJson] = await Promise.all([
+          api.getLatencyData(),
+          api.getModels()
+        ]);
+
+        console.log("Fetched Latency Data:", latencyJson);
+        console.log("Fetched Model Info:", modelsJson);
+
+        setLatencyData(latencyJson);
+        setModelInfo(modelsJson);
+
+      } catch (e: any) {
+        console.error("Failed to fetch data:", e);
+        if (isInitialLoad) {
+          setError(`Failed to load initial data: ${e.message || 'Unknown error'}`);
+        } else {
+          console.error("Failed to refresh data:", e);
         }
-        setLatencyData(data);
+      } finally {
         setLoading(false);
-      } catch (err) {
-        console.error('Error fetching data:', err);
-        setError(err instanceof Error ? err.message : 'Failed to fetch data');
-        setLatencyData([]);
-        setLoading(false);
+        setIsRefreshing(false);
       }
     };
 
-    fetchData();
-    // Fetch every 5 seconds for more real-time updates
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+    fetchData(true);
+    const intervalId = setInterval(() => fetchData(false), MONITOR_INTERVAL_MS);
+
+    return () => clearInterval(intervalId);
   }, []);
 
-  const getStats = () => {
-    if (!Array.isArray(latencyData) || !latencyData.length) {
-      return { 
-        models: 0, 
-        cloudLatency: 0,
-        onPremLatency: 0 
-      };
+  const calculateStats = (data: LatencyRecord[]) => {
+    if (!data || data.length === 0) {
+      return { cloudLatency: 0, onPremLatency: 0, monitoredInLastCycleCount: 0, uniqueModelCount: 0 };
     }
-    
-    const uniqueModels = new Set(latencyData.map(d => d.model_name));
-    
-    // Calculate average latency for cloud models
-    const cloudRecords = latencyData.filter(d => d.is_cloud);
-    const cloudLatency = cloudRecords.length 
-      ? cloudRecords.reduce((sum, d) => sum + d.latency_ms, 0) / cloudRecords.length 
+
+    // Calculate unique model count
+    const uniqueModelNames = new Set(data.map(d => d.model_name));
+    const uniqueModelCount = uniqueModelNames.size;
+
+    const validLatencyRecords = data.filter(d => d.latency_ms !== null && d.latency_ms >= 0);
+    const cloudRecords = validLatencyRecords.filter(d => d.is_cloud);
+    const cloudLatency = cloudRecords.length
+      ? cloudRecords.reduce((sum, d) => sum + (d.latency_ms ?? 0), 0) / cloudRecords.length
       : 0;
 
-    // Calculate average latency for on-prem models
-    const onPremRecords = latencyData.filter(d => !d.is_cloud);
-    const onPremLatency = onPremRecords.length 
-      ? onPremRecords.reduce((sum, d) => sum + d.latency_ms, 0) / onPremRecords.length 
+    const onPremRecords = validLatencyRecords.filter(d => !d.is_cloud);
+    const onPremLatency = onPremRecords.length
+      ? onPremRecords.reduce((sum, d) => sum + (d.latency_ms ?? 0), 0) / onPremRecords.length
       : 0;
+
+    let monitoredInLastCycleCount = 0;
+    try {
+        // 1. Find the absolute latest timestamp (as epoch milliseconds)
+        const maxTimestampEpoch = Math.max(...data.map(r => new Date(r.timestamp).getTime()));
+
+        // 2. Find the latest timestamp for each model
+        const latestTimestampPerModel = new Map<string, number>();
+        data.forEach(record => {
+            const modelName = record.model_name;
+            const recordTimestampEpoch = new Date(record.timestamp).getTime();
+            if (!latestTimestampPerModel.has(modelName) || recordTimestampEpoch > (latestTimestampPerModel.get(modelName) ?? 0)) {
+                latestTimestampPerModel.set(modelName, recordTimestampEpoch);
+            }
+        });
+
+        // 3. Count models whose latest timestamp is within the tolerance window
+        latestTimestampPerModel.forEach((modelTimestampEpoch) => {
+            if (maxTimestampEpoch - modelTimestampEpoch <= TIMESTAMP_TOLERANCE_MS) {
+                monitoredInLastCycleCount++;
+            }
+        });
+         console.log(`Max Timestamp: ${new Date(maxTimestampEpoch).toISOString()}, Models in last cycle: ${monitoredInLastCycleCount}`);
+
+    } catch (e) {
+        console.error("Error calculating last monitored count:", e);
+        // Fallback or default value if calculation fails
+        monitoredInLastCycleCount = 0; // Or maybe use the previous method as fallback?
+    }
 
     return {
-      models: uniqueModels.size,
-      cloudLatency,
-      onPremLatency
+      cloudLatency: cloudLatency / 1000, // Convert ms to s
+      onPremLatency: onPremLatency / 1000, // Convert ms to s
+      monitoredInLastCycleCount: monitoredInLastCycleCount, // Use the new count
+      uniqueModelCount: uniqueModelCount
     };
   };
 
-  const stats = getStats();
+  const stats = calculateStats(latencyData);
 
   if (loading) return (
     <ThemeProvider theme={theme}>
@@ -170,6 +219,7 @@ function App() {
             <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 600 }}>
               LLM Performance Monitor
             </Typography>
+            {isRefreshing && <CircularProgress size={24} color="inherit" sx={{ mr: 2 }} />}
             <IconButton onClick={() => setDarkMode(!darkMode)} color="inherit">
               {darkMode ? <Brightness7Icon /> : <Brightness4Icon />}
             </IconButton>
@@ -186,7 +236,7 @@ function App() {
                   <Typography variant="h6" sx={{ fontWeight: 500 }}>Models Monitored</Typography>
                 </Box>
                 <Typography variant="h3" sx={{ fontWeight: 600 }}>
-                  {stats.models}
+                  {stats.uniqueModelCount}
                 </Typography>
               </Paper>
             </Grid>
@@ -197,7 +247,7 @@ function App() {
                   <Typography variant="h6" sx={{ fontWeight: 500 }}>Cloud Latency</Typography>
                 </Box>
                 <Typography variant="h3" sx={{ fontWeight: 600 }}>
-                  {(stats.cloudLatency / 1000).toFixed(2)}
+                  {stats.cloudLatency.toFixed(2)}
                   <Typography component="span" variant="h6" color="text.secondary"> s</Typography>
                 </Typography>
               </Paper>
@@ -209,7 +259,7 @@ function App() {
                   <Typography variant="h6" sx={{ fontWeight: 500 }}>On-Prem Latency</Typography>
                 </Box>
                 <Typography variant="h3" sx={{ fontWeight: 600 }}>
-                  {(stats.onPremLatency / 1000).toFixed(2)}
+                  {stats.onPremLatency.toFixed(2)}
                   <Typography component="span" variant="h6" color="text.secondary"> s</Typography>
                 </Typography>
               </Paper>
@@ -220,12 +270,12 @@ function App() {
           <Grid container spacing={3}>
             <Grid item xs={12}>
               <Paper sx={{ p: 3 }}>
-                <LatencyGraph data={latencyData} />
+                <LatencyGraph data={latencyData} modelInfo={modelInfo} />
               </Paper>
             </Grid>
             <Grid item xs={12}>
               <Paper sx={{ p: 3 }}>
-                <LatencyTable data={latencyData} />
+                <LatencyTable data={latencyData} modelInfo={modelInfo} />
               </Paper>
             </Grid>
           </Grid>

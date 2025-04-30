@@ -7,6 +7,9 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  LineChart,
+  Line,
+  Legend,
 } from 'recharts';
 import { 
   Box, 
@@ -19,14 +22,22 @@ import {
   FormControlLabel,
   Stack,
   Chip,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  OutlinedInput,
+  ListItemText,
+  Paper,
 } from '@mui/material';
-import { LatencyRecord } from '../types/types';
+import { LatencyRecord, ModelInfo } from '../types/types';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import { IconButton, Tooltip as MuiTooltip, Fade, Badge } from '@mui/material';
 
 interface Props {
   data: LatencyRecord[];
+  modelInfo: { [key: string]: ModelInfo };
 }
 
 interface ModelData {
@@ -115,13 +126,83 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
-const LatencyGraph: React.FC<Props> = ({ data }) => {
+// Define the structure of aggregated data points for the graph
+interface GraphPoint {
+  timestamp: number; // Unix timestamp (milliseconds) for the interval start
+  [model: string]: number; // Average latency for each model in seconds
+}
+
+// Define the structure for intermediate aggregation
+interface AggregatedPointData {
+  timestamp: number;
+  modelCounts: { [model: string]: number };
+  modelSums: { [model: string]: number }; // Sum of latencies in seconds
+}
+
+// Helper function to aggregate data by time interval
+const aggregateDataByTime = (
+  data: LatencyRecord[],
+  intervalMinutes: number,
+  selectedModelsSet: Set<string>
+): GraphPoint[] => {
+  const intervalMillis = intervalMinutes * 60 * 1000;
+  const aggregated: Map<number, AggregatedPointData> = new Map();
+
+  const filteredData = data.filter(record =>
+    selectedModelsSet.has(record.model_name) && record.timestamp
+  );
+
+  filteredData.forEach(record => {
+    const timestamp = new Date(record.timestamp).getTime();
+    const intervalStart = Math.floor(timestamp / intervalMillis) * intervalMillis;
+
+    if (!aggregated.has(intervalStart)) {
+      aggregated.set(intervalStart, {
+        timestamp: intervalStart,
+        modelCounts: {},
+        modelSums: {},
+      });
+    }
+
+    const point = aggregated.get(intervalStart)!;
+    const modelName = record.model_name;
+
+    if (!point.modelCounts[modelName]) {
+      point.modelCounts[modelName] = 0;
+      point.modelSums[modelName] = 0;
+    }
+
+    if (record.latency_ms !== null) {
+        point.modelCounts[modelName]++;
+        point.modelSums[modelName] += record.latency_ms / 1000;
+    }
+  });
+
+  const result: GraphPoint[] = Array.from(aggregated.values()).map(point => {
+    const averages: { [model: string]: number } = {};
+    for (const modelName in point.modelCounts) {
+      if (point.modelCounts[modelName] > 0) {
+        averages[modelName] = point.modelSums[modelName] / point.modelCounts[modelName];
+      }
+    }
+    return {
+      timestamp: point.timestamp,
+      ...averages,
+    };
+  }).sort((a, b) => a.timestamp - b.timestamp);
+
+  return result;
+};
+
+const LatencyGraph: React.FC<Props> = ({ data, modelInfo }) => {
   const theme = useTheme();
   const [timeRange, setTimeRange] = useState<string>('live');
-  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [updateCount, setUpdateCount] = useState(0);
+  const [intervalMinutes, setIntervalMinutes] = useState<number>(60);
+  const allModels = useMemo(() => Object.keys(modelInfo).sort(), [modelInfo]);
 
   // Update more frequently for live view
   useEffect(() => {
@@ -138,7 +219,7 @@ const LatencyGraph: React.FC<Props> = ({ data }) => {
 
   useEffect(() => {
     const allModels = new Set(data.map(record => record.model_name));
-    setSelectedModels(allModels);
+    setSelectedModels(Array.from(allModels));
   }, [data]);
 
   // Add debug logging
@@ -217,8 +298,10 @@ const LatencyGraph: React.FC<Props> = ({ data }) => {
           point.modelSums[modelName] = 0;
         }
         
-        point.modelCounts[modelName]++;
-        point.modelSums[modelName] += record.latency_ms / 1000;
+        if (record.latency_ms !== null) {
+          point.modelCounts[modelName]++;
+          point.modelSums[modelName] += record.latency_ms / 1000;
+        }
       });
 
       // Convert to final format with averages
@@ -226,7 +309,11 @@ const LatencyGraph: React.FC<Props> = ({ data }) => {
         .map(point => {
           const result: Record<string, number> = { timestamp: point.timestamp };
           Object.keys(point.modelSums).forEach(model => {
-            result[model] = point.modelSums[model] / point.modelCounts[model];
+            if (point.modelCounts[model] > 0) {
+              result[model] = point.modelSums[model] / point.modelCounts[model];
+            } else {
+              result[model] = 0;
+            }
           });
           return result;
         })
@@ -259,8 +346,10 @@ const LatencyGraph: React.FC<Props> = ({ data }) => {
         sum: 0
       };
       
-      modelData.count++;
-      modelData.sum += record.latency_ms / 1000;
+      if (record.latency_ms !== null) {
+        modelData.count++;
+        modelData.sum += record.latency_ms / 1000;
+      }
       point.models.set(record.model_name, modelData);
     });
 
@@ -268,7 +357,11 @@ const LatencyGraph: React.FC<Props> = ({ data }) => {
     return Array.from(dataPoints.values()).map(point => {
       const result: Record<string, number> = { timestamp: point.timestamp };
       point.models.forEach((data: ModelData, model: string) => {
-        result[model] = data.sum / data.count;
+        if (data.count > 0) {
+          result[model] = data.sum / data.count;
+        } else {
+          result[model] = 0;
+        }
       });
       return result;
     }).sort((a, b) => a.timestamp - b.timestamp);
@@ -281,12 +374,7 @@ const LatencyGraph: React.FC<Props> = ({ data }) => {
 
   const handleModelToggle = (model: string) => {
     setSelectedModels(prev => {
-      const newSelected = new Set(prev);
-      if (newSelected.has(model)) {
-        newSelected.delete(model);
-      } else {
-        newSelected.add(model);
-      }
+      const newSelected = prev.filter(m => m !== model);
       return newSelected;
     });
   };
@@ -296,7 +384,7 @@ const LatencyGraph: React.FC<Props> = ({ data }) => {
     let maxLatency = 0;
     processedData.forEach(point => {
       models.forEach(model => {
-        if (selectedModels.has(model) && point[model]) {
+        if (selectedModels.includes(model) && point[model]) {
           maxLatency = Math.max(maxLatency, point[model]);
         }
       });
@@ -310,245 +398,135 @@ const LatencyGraph: React.FC<Props> = ({ data }) => {
     setTimeout(() => setIsRefreshing(false), 1000);
   };
 
-  return (
-    <Box>
-      <Box sx={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'flex-start',
-        mb: 3,
-        flexWrap: 'wrap',
-        gap: 2,
-      }}>
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-            <TimelineIcon sx={{ mr: 1, color: 'primary.main' }} />
-            <Typography variant="h6" sx={{ fontWeight: 500 }}>
-              Latency Over Time
-            </Typography>
-            <MuiTooltip 
-              title="Refresh data" 
-              TransitionComponent={Fade}
-              TransitionProps={{ timeout: 300 }}
-            >
-              <IconButton 
-                size="small" 
-                onClick={handleRefresh}
-                sx={{ ml: 1, transform: isRefreshing ? 'rotate(180deg)' : 'none', transition: 'transform 0.5s' }}
-              >
-                <Badge 
-                  badgeContent={updateCount} 
-                  color="primary"
-                  sx={{ 
-                    '& .MuiBadge-badge': { 
-                      display: timeRange === 'live' ? 'block' : 'none' 
-                    } 
-                  }}
-                >
-                  <RefreshIcon fontSize="small" />
-                </Badge>
-              </IconButton>
-            </MuiTooltip>
-          </Box>
-          
-          {/* Model selection with improved layout */}
-          <Box 
-            sx={{ 
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 1,
-              maxWidth: '80vw',
-              p: 1,
-              borderRadius: 1,
-              bgcolor: 'background.paper',
-              border: '1px solid',
-              borderColor: 'divider',
-            }}
-          >
-            {models.map((model, index) => (
-              <Chip
-                key={model}
-                label={model}
-                size="small"
-                variant={selectedModels.has(model) ? "filled" : "outlined"}
-                onClick={() => handleModelToggle(model)}
-                sx={{
-                  bgcolor: selectedModels.has(model) 
-                    ? `${MODEL_COLORS[index % MODEL_COLORS.length]}20`
-                    : 'transparent',
-                  color: selectedModels.has(model)
-                    ? MODEL_COLORS[index % MODEL_COLORS.length]
-                    : 'text.secondary',
-                  borderColor: MODEL_COLORS[index % MODEL_COLORS.length],
-                  '&:hover': {
-                    bgcolor: `${MODEL_COLORS[index % MODEL_COLORS.length]}30`,
-                  },
-                }}
-              />
-            ))}
-          </Box>
-        </Box>
+  const handleIntervalChange = (event: any) => {
+    setIntervalMinutes(Number(event.target.value));
+  };
 
-        {/* Improved time range selector */}
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-          <ToggleButtonGroup
-            value={timeRange}
-            exclusive
-            onChange={(_, value) => value && setTimeRange(value)}
-            size="small"
-            sx={{
-              bgcolor: 'background.paper',
-              '& .MuiToggleButton-root': {
-                px: 3,
-                py: 0.5,
-                border: '1px solid',
-                borderColor: 'divider',
-                '&.Mui-selected': {
-                  bgcolor: 'primary.main',
-                  color: 'white',
-                  '&:hover': {
-                    bgcolor: 'primary.dark',
-                  },
-                },
-              },
-            }}
-          >
-            <ToggleButton value="live" sx={{ color: timeRange === 'live' ? 'white' : 'success.main' }}>
-              Live
-            </ToggleButton>
-            <ToggleButton value="6h">6H</ToggleButton>
-            <ToggleButton value="24h">24H</ToggleButton>
-          </ToggleButtonGroup>
+  const handleModelChange = (event: any) => {
+    const {
+      target: { value },
+    } = event;
+    setSelectedModels(
+      typeof value === 'string' ? value.split(',') : value,
+    );
+  };
+
+  // Memoize aggregated data calculation
+  const aggregatedData = useMemo(() => {
+    console.log(`Aggregating graph data for interval: ${intervalMinutes}m, models: ${selectedModels.join(', ')}`);
+    const selectedModelsSet = new Set(selectedModels);
+    return aggregateDataByTime(data, intervalMinutes, selectedModelsSet);
+  }, [data, intervalMinutes, selectedModels]);
+
+  const lineColors = [
+    theme.palette.primary.main,
+    theme.palette.secondary.main,
+    theme.palette.success.main,
+    theme.palette.warning.main,
+    theme.palette.info.main,
+    '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'
+  ];
+
+  const formatXAxis = (tickItem: number) => {
+    return new Date(tickItem).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  return (
+    <Paper elevation={2} sx={{ p: 3, borderRadius: 2 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h6" component="h3">Latency Trend</Typography>
+        <Box sx={{ display: 'flex', gap: 2 }}>
+           {/* Model Selector */}
+           <FormControl sx={{ m: 1, minWidth: 200 }} size="small">
+             <InputLabel id="model-select-label">Models</InputLabel>
+             <Select
+               labelId="model-select-label"
+               multiple
+               value={selectedModels}
+               onChange={handleModelChange}
+               input={<OutlinedInput label="Models" />}
+               renderValue={(selected) => selected.join(', ')}
+               MenuProps={{ PaperProps: { style: { maxHeight: 48 * 4.5 + 8, width: 250 } } }}
+             >
+               {allModels.map((modelName) => (
+                 <MenuItem key={modelName} value={modelName}>
+                   <Checkbox checked={selectedModels.includes(modelName)} />
+                   <ListItemText primary={modelName} />
+                 </MenuItem>
+               ))}
+             </Select>
+           </FormControl>
+
+           {/* Interval Selector */}
+           <FormControl sx={{ m: 1, minWidth: 120 }} size="small">
+             <InputLabel id="interval-select-label">Interval</InputLabel>
+             <Select
+               labelId="interval-select-label"
+               value={intervalMinutes}
+               label="Interval"
+               onChange={handleIntervalChange}
+             >
+               <MenuItem value={5}>5 min</MenuItem>
+               <MenuItem value={15}>15 min</MenuItem>
+               <MenuItem value={30}>30 min</MenuItem>
+               <MenuItem value={60}>1 hour</MenuItem>
+               <MenuItem value={180}>3 hours</MenuItem>
+               <MenuItem value={360}>6 hours</MenuItem>
+             </Select>
+           </FormControl>
         </Box>
       </Box>
 
-      {/* Graph container with improved styling */}
-      <Box 
-        sx={{ 
-          width: '100%', 
-          height: 400,
-          p: 2,
-          borderRadius: 2,
-          bgcolor: 'background.paper',
-          border: '1px solid',
-          borderColor: 'divider',
-          boxShadow: theme.shadows[1],
-        }}
-      >
-        <ResponsiveContainer>
-          <AreaChart
-            data={processedData}
-            margin={{ top: 10, right: 30, left: 10, bottom: 40 }}
+      {aggregatedData.length === 0 && selectedModels.length > 0 && (
+         <Typography sx={{ textAlign: 'center', my: 4 }} color="text.secondary">
+             No latency data available for the selected models in this time range.
+         </Typography>
+      )}
+       {selectedModels.length === 0 && (
+         <Typography sx={{ textAlign: 'center', my: 4 }} color="text.secondary">
+             Please select one or more models to display the graph.
+         </Typography>
+      )}
+
+      {aggregatedData.length > 0 && selectedModels.length > 0 && (
+        <ResponsiveContainer width="100%" height={400}>
+          <LineChart
+            data={aggregatedData}
+            margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
           >
-            <defs>
-              {models.map((model, index) => (
-                <linearGradient key={model} id={`gradient-${model}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop 
-                    offset="5%" 
-                    stopColor={MODEL_COLORS[index % MODEL_COLORS.length]} 
-                    stopOpacity={0.3}
-                  />
-                  <stop 
-                    offset="95%" 
-                    stopColor={MODEL_COLORS[index % MODEL_COLORS.length]} 
-                    stopOpacity={0.05}
-                  />
-                </linearGradient>
-              ))}
-            </defs>
-            <CartesianGrid 
-              strokeDasharray="3 3" 
-              vertical={false}
-              stroke={alpha(theme.palette.divider, 0.5)}
-              strokeWidth={0.5}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
             <XAxis
               dataKey="timestamp"
-              type="number"
-              domain={['dataMin', 'dataMax']}
-              tickFormatter={(timestamp) => {
-                const date = new Date(timestamp);
-                if (timeRange === 'live') {
-                  return date.toLocaleTimeString([], { 
-                    hour: '2-digit', 
-                    minute: '2-digit',
-                    second: '2-digit'
-                  });
-                } else if (timeRange === '6h') {
-                  return date.toLocaleTimeString([], { 
-                    hour: '2-digit', 
-                    minute: '2-digit'
-                  });
-                } else {
-                  return date.toLocaleString([], {
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  });
-                }
-              }}
-              interval={timeRange === 'live' ? 0 : 'preserveStartEnd'}
-              minTickGap={timeRange === 'live' ? 30 : 50}
-              tick={{ fontSize: 11, fill: theme.palette.text.secondary }}
-              angle={-45}
-              textAnchor="end"
-              height={70}
-              tickMargin={25}
-              stroke={theme.palette.divider}
-              strokeWidth={0.5}
+              tickFormatter={formatXAxis}
+              stroke={theme.palette.text.secondary}
+              dy={10}
             />
-            <YAxis 
-              domain={yAxisDomain}
-              label={{ 
-                value: 'Latency (s)', 
-                angle: -90, 
-                position: 'insideLeft',
-                style: { 
-                  textAnchor: 'middle',
-                  fill: theme.palette.text.secondary,
-                  fontSize: 12,
-                }
-              }}
-              tick={{ fontSize: 11, fill: theme.palette.text.secondary }}
-              stroke={theme.palette.divider}
-              strokeWidth={0.5}
+            <YAxis
+              stroke={theme.palette.text.secondary}
+              label={{ value: 'Avg Latency (s)', angle: -90, position: 'insideLeft', fill: theme.palette.text.secondary }}
+              tickFormatter={(value) => value.toFixed(1)}
             />
-            <Tooltip 
-              content={<CustomTooltip />}
-              cursor={{ 
-                stroke: theme.palette.divider, 
-                strokeWidth: 1,
-                strokeDasharray: '3 3'
-              }}
+            <Tooltip
+              contentStyle={{ backgroundColor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}` }}
+              labelFormatter={(label) => new Date(label).toLocaleString()}
+              formatter={(value: number, name: string) => [`${value.toFixed(2)}s`, name]}
             />
-            {models
-              .filter(model => selectedModels.has(model))
-              .map((model, index) => (
-                <Area
-                  key={model}
-                  type="monotone"
-                  dataKey={model}
-                  name={model}
-                  stroke={MODEL_COLORS[index % MODEL_COLORS.length]}
-                  fill={`url(#gradient-${model})`}
-                  strokeWidth={2}
-                  dot={timeRange === 'live'}
-                  activeDot={{
-                    r: 6,
-                    stroke: theme.palette.background.paper,
-                    strokeWidth: 2,
-                    fill: MODEL_COLORS[index % MODEL_COLORS.length]
-                  }}
-                  connectNulls
-                  animationDuration={300}
-                  isAnimationActive={true}
-                />
+            <Legend />
+            {selectedModels.map((modelName, index) => (
+              <Line
+                key={modelName}
+                type="monotone"
+                dataKey={modelName}
+                stroke={lineColors[index % lineColors.length]}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+              />
             ))}
-          </AreaChart>
+          </LineChart>
         </ResponsiveContainer>
-      </Box>
-    </Box>
+      )}
+    </Paper>
   );
 };
 

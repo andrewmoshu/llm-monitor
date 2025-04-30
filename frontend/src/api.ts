@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { LatencyRecord } from './types/types';
+import { LatencyRecord, ModelInfo } from './types/types';
 
 // Base URL configuration
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
@@ -15,21 +15,21 @@ axios.interceptors.request.use(request => {
 export const api = {
   getLatencyData: async (): Promise<LatencyRecord[]> => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/latency`);
+      const response = await axios.get<LatencyRecord[]>(`${API_BASE_URL}/latency`);
       return Array.isArray(response.data) ? response.data : [];
     } catch (error) {
-      console.error('API Error:', error);
+      console.error('API Error fetching latency:', error);
       return [];
     }
   },
 
-  getModels: async (): Promise<string[]> => {
+  getModels: async (): Promise<{ [key: string]: ModelInfo }> => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/models`);
-      return Array.isArray(response.data) ? response.data : [];
+      const response = await axios.get<{ [key: string]: ModelInfo }>(`${API_BASE_URL}/models`);
+      return typeof response.data === 'object' && response.data !== null ? response.data : {};
     } catch (error) {
-      console.error('API Error:', error);
-      return [];
+      console.error('API Error fetching models:', error);
+      return {};
     }
   }
 }; 
