@@ -4,7 +4,7 @@ import { LatencyRecord, ModelInfo } from './types/types';
 // Base URL configuration
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
   ? `${window.location.origin}/api`
-  : 'http://localhost:8001/api';
+  : 'http://localhost:8000/api';
 
 // Add request interceptor for debugging
 axios.interceptors.request.use(request => {

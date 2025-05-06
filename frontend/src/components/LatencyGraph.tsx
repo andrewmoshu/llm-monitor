@@ -29,6 +29,8 @@ import {
   OutlinedInput,
   ListItemText,
   Paper,
+  Autocomplete,
+  TextField,
 } from '@mui/material';
 import { LatencyRecord, ModelInfo } from '../types/types';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -402,13 +404,8 @@ const LatencyGraph: React.FC<Props> = ({ data, modelInfo }) => {
     setIntervalMinutes(Number(event.target.value));
   };
 
-  const handleModelChange = (event: any) => {
-    const {
-      target: { value },
-    } = event;
-    setSelectedModels(
-      typeof value === 'string' ? value.split(',') : value,
-    );
+  const handleModelChange = (event: any, newValue: string[]) => {
+    setSelectedModels(newValue);
   };
 
   // Memoize aggregated data calculation
@@ -435,26 +432,32 @@ const LatencyGraph: React.FC<Props> = ({ data, modelInfo }) => {
     <Paper elevation={2} sx={{ p: 3, borderRadius: 2 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h6" component="h3">Latency Trend</Typography>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-           {/* Model Selector */}
-           <FormControl sx={{ m: 1, minWidth: 200 }} size="small">
-             <InputLabel id="model-select-label">Models</InputLabel>
-             <Select
-               labelId="model-select-label"
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+           {/* Model Selector - Replaced with Autocomplete */}
+           <FormControl sx={{ m: 1, width: 300 }} size="small">
+             <Autocomplete
                multiple
+               id="model-select-autocomplete"
+               options={allModels}
                value={selectedModels}
                onChange={handleModelChange}
-               input={<OutlinedInput label="Models" />}
-               renderValue={(selected) => selected.join(', ')}
-               MenuProps={{ PaperProps: { style: { maxHeight: 48 * 4.5 + 8, width: 250 } } }}
-             >
-               {allModels.map((modelName) => (
-                 <MenuItem key={modelName} value={modelName}>
-                   <Checkbox checked={selectedModels.includes(modelName)} />
-                   <ListItemText primary={modelName} />
-                 </MenuItem>
-               ))}
-             </Select>
+               disableCloseOnSelect
+               getOptionLabel={(option) => option}
+               renderInput={(params) => (
+                 <TextField
+                   {...params}
+                   label="Models"
+                   placeholder={selectedModels.length > 0 ? '' : "Select models"}
+                 />
+               )}
+               renderOption={(props, option, { selected }) => (
+                <li {...props}>
+                  <Checkbox checked={selected} />
+                  {option}
+                </li>
+              )}
+              sx={{ width: '100%' }}
+             />
            </FormControl>
 
            {/* Interval Selector */}

@@ -34,6 +34,23 @@ const LatencyTable: React.FC<Props> = ({ data, modelInfo }) => {
   const [sortField, setSortField] = useState<SortField>('model_name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
 
+  // Define createPlaceholderRecord *before* it's used in useMemo
+  const createPlaceholderRecord = (modelName: string, info: ModelInfo | undefined): LatencyRecord => {
+    const placeholderTimestamp = new Date(0).toISOString();
+
+    return {
+        model_name: modelName,
+        timestamp: placeholderTimestamp,
+        latency_ms: null,
+        input_tokens: null,
+        output_tokens: null,
+        cost: null,
+        context_window: info?.context_window ?? null,
+        is_cloud: info?.is_cloud ?? false,
+        status: 'unavailable',
+    };
+  };
+
   const displayRecords = useMemo(() => {
     console.log("Recalculating display records...");
 
@@ -136,22 +153,6 @@ const LatencyTable: React.FC<Props> = ({ data, modelInfo }) => {
       default:
         return { icon: <HelpOutlineIcon />, color: 'warning', label: status || 'Unknown' };
     }
-  };
-
-  const createPlaceholderRecord = (modelName: string, info: ModelInfo | undefined): LatencyRecord => {
-    const placeholderTimestamp = new Date(0).toISOString();
-
-    return {
-        model_name: modelName,
-        timestamp: placeholderTimestamp,
-        latency_ms: null,
-        input_tokens: null,
-        output_tokens: null,
-        cost: null,
-        context_window: info?.context_window ?? null,
-        is_cloud: info?.is_cloud ?? false,
-        status: 'unavailable',
-    };
   };
 
   return (

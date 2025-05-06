@@ -27,7 +27,7 @@ import { LatencyRecord, ModelInfo } from './types/types';
 import './App.css';
 import StatCard from './components/StatCard';
 
-const API_BASE = 'http://localhost:8001/api';
+const API_BASE = 'http://localhost:8000/api';
 
 // Assume the backend monitor interval is 60 seconds for calculation
 const MONITOR_INTERVAL_MS = 60 * 1000;

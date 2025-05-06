@@ -18,6 +18,7 @@ import aiohttp # Keep if LLMManager needs it for external calls
 from llm_manager import LLMManager, MAX_OUTPUT_TOKENS # Import MAX_OUTPUT_TOKENS if needed globally
 import ssl # Keep if LLMManager or dependencies need it
 from schemas import LatencyRecordCreate, LatencyRecord as SchemaLatencyRecord, ModelInfo
+import threading # <-- Add threading import
 
 # --- Existing Database imports commented out ---
 # from sqlalchemy.orm import Session
@@ -248,46 +249,71 @@ async def measure_latency(model_name: str, llm_manager: LLMManager):
     except Exception as e:
         logger.error(f"Error measuring latency for {model_name}: {str(e)}", exc_info=True) # Log traceback
 
-async def monitor_latencies_periodically(llm_manager: LLMManager):
+async def monitor_latencies_periodically(
+    llm_manager: LLMManager, 
+    shutdown_event: threading.Event # <-- Add shutdown_event parameter
+):
     """Periodically measures latency for all configured models."""
     models = list(MODEL_CONFIG.keys()) # Get models from the unified config
-    logger.info(f"Starting periodic monitoring for models: {', '.join(models)}")
+    logger.info(f"[Thread: {threading.get_ident()}] Starting periodic monitoring for models: {', '.join(models)}")
 
-    while True:
+    while not shutdown_event.is_set(): # <-- Check shutdown event
         try:
             tasks = []
-            logger.info(f"Running latency checks for models: {', '.join(models)}")
+            logger.info(f"[Thread: {threading.get_ident()}] Running latency checks for models: {', '.join(models)}")
             for model in models:
                 # Create task for each model measurement
                 task = asyncio.create_task(measure_latency(model, llm_manager))
                 tasks.append(task)
 
             # Wait for all tasks to complete for this cycle
-            # Use gather with return_exceptions=True to handle individual failures
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Log any exceptions that occurred during the tasks
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logger.error(f"Task for model {models[i]} failed: {result}", exc_info=result)
+                    logger.error(f"[Thread: {threading.get_ident()}] Task for model {models[i]} failed: {result}", exc_info=result)
 
-            logger.info(f"Completed latency measurement cycle. Waiting {MONITOR_INTERVAL_SECONDS} seconds...")
-            await asyncio.sleep(MONITOR_INTERVAL_SECONDS)
+            logger.info(f"[Thread: {threading.get_ident()}] Completed latency measurement cycle. Waiting {MONITOR_INTERVAL_SECONDS} seconds...")
+            # Use event.wait for interruptible sleep
+            # If shutdown_event is set during this wait, it will return True immediately.
+            if shutdown_event.wait(timeout=MONITOR_INTERVAL_SECONDS):
+                logger.info(f"[Thread: {threading.get_ident()}] Shutdown event received during sleep, exiting monitor loop.")
+                break # Exit loop if event is set
 
         except asyncio.CancelledError:
-            logger.info("Latency monitoring task cancelled.")
+            logger.info(f"[Thread: {threading.get_ident()}] Latency monitoring task in thread cancelled.")
             break
         except Exception as e:
-            logger.error(f"Error in monitoring loop: {str(e)}", exc_info=True)
-            logger.info("Waiting 5 seconds before retrying monitoring loop...")
-            await asyncio.sleep(5) # Wait a bit before retrying the loop
-
+            logger.error(f"[Thread: {threading.get_ident()}] Error in monitoring loop: {str(e)}", exc_info=True)
+            logger.info(f"[Thread: {threading.get_ident()}] Waiting 5 seconds before retrying monitoring loop...")
+            # Check event again before short sleep to avoid long waits on shutdown
+            if shutdown_event.wait(timeout=5):
+                 logger.info(f"[Thread: {threading.get_ident()}] Shutdown event received during error recovery sleep, exiting.")
+                 break
+    logger.info(f"[Thread: {threading.get_ident()}] Latency monitoring loop terminated.")
 
 # --- FastAPI Application ---
-background_tasks = set()
+# Remove background_tasks set if no longer used for asyncio tasks directly in lifespan
+# background_tasks = set()
+
+# Global for holding the thread and event
+monitor_thread: Optional[threading.Thread] = None
+monitor_shutdown_event: Optional[threading.Event] = None
+
+
+def run_monitor_in_thread(llm_manager: LLMManager, shutdown_event: threading.Event):
+    """Target function for the monitoring thread."""
+    logger.info(f"Monitoring thread {threading.get_ident()} started.")
+    try:
+        asyncio.run(monitor_latencies_periodically(llm_manager, shutdown_event))
+    except Exception as e:
+        logger.error(f"Exception in monitoring thread {threading.get_ident()}: {e}", exc_info=True)
+    finally:
+        logger.info(f"Monitoring thread {threading.get_ident()} finished.")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global monitor_thread, monitor_shutdown_event
     # Run startup logic
     logger.info("Running startup logic...")
     load_data_from_csv()
@@ -310,12 +336,15 @@ async def lifespan(app: FastAPI):
     # Start the background monitoring task only if LLMManager initialized
     monitor_task = None
     if llm_manager:
-        logger.info("Starting background latency monitor task...")
-        monitor_task = asyncio.create_task(monitor_latencies_periodically(llm_manager))
-        background_tasks.add(monitor_task)
-        # Ensure task removal on completion/cancellation
-        monitor_task.add_done_callback(background_tasks.discard)
-        logger.info("Latency monitor task started.")
+        logger.info("Starting background latency monitor task in a new thread...")
+        monitor_shutdown_event = threading.Event()
+        monitor_thread = threading.Thread(
+            target=run_monitor_in_thread, 
+            args=(llm_manager, monitor_shutdown_event),
+            daemon=True # Set as daemon so it doesn't block app exit if main thread dies unexpectedly
+        )
+        monitor_thread.start()
+        logger.info(f"Latency monitor thread ({monitor_thread.ident}) started.")
     else:
         logger.warning("LLMManager initialization failed. Latency monitoring will not run.")
 
@@ -324,18 +353,15 @@ async def lifespan(app: FastAPI):
     yield
     # Run shutdown logic
     logger.info("Running shutdown logic...")
-    # Optionally: Cancel background tasks for graceful shutdown
-    if monitor_task and monitor_task in background_tasks:
-        logger.info("Cancelling background latency monitor task...")
-        monitor_task.cancel()
-        try:
-            await monitor_task # Wait for task to acknowledge cancellation
-        except asyncio.CancelledError:
-            logger.info("Latency monitor task successfully cancelled.")
-        except Exception as e:
-            logger.error(f"Error during monitor task cancellation: {e}", exc_info=True)
+    if monitor_thread and monitor_shutdown_event:
+        logger.info(f"Signalling latency monitor thread ({monitor_thread.ident}) to shut down...")
+        monitor_shutdown_event.set()
+        monitor_thread.join(timeout=10) # Wait for the thread to finish, with a timeout
+        if monitor_thread.is_alive():
+            logger.warning(f"Latency monitor thread ({monitor_thread.ident}) did not shut down gracefully after 10s.")
+        else:
+            logger.info(f"Latency monitor thread ({monitor_thread.ident}) shut down successfully.")
 
-    # Optional: Save data again on shutdown? Might be redundant if appending on each record.
     logger.info("Shutdown complete.")
 
 
