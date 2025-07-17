@@ -17,8 +17,15 @@ import asyncio
 import aiohttp # Keep if LLMManager needs it for external calls
 from llm_manager import LLMManager, MAX_OUTPUT_TOKENS # Import MAX_OUTPUT_TOKENS if needed globally
 import ssl # Keep if LLMManager or dependencies need it
-from schemas import LatencyRecordCreate, LatencyRecord as SchemaLatencyRecord, ModelInfo
+from schemas import LatencyRecordCreate, LatencyRecord as SchemaLatencyRecord, ModelInfo, UsageStats
 import threading # <-- Add threading import
+from usage_data_fetcher import UsageDataFetcher, Environment  # Import usage data fetcher
+from model_config_builder import build_dynamic_model_config, get_minimal_static_config  # Import config builder
+from config import MULTI_ENV_MODE, ENVIRONMENTS, ENVIRONMENT_VARIATIONS, is_full_multi_env  # Import config
+
+# Conditionally import multi-env monitor based on configuration
+if is_full_multi_env():
+    from multi_env_monitor import MultiEnvironmentMonitor, monitor_all_environments
 
 # --- Existing Database imports commented out ---
 # from sqlalchemy.orm import Session
@@ -59,75 +66,16 @@ Please explain the concept of quantum computing, focusing on the following aspec
 Keep your response focused and technical, but accessible to someone with a basic understanding of computer science.
 Format your response in a structured manner with clear sections.""" # Simplified for brevity
 
-# --- Unified Model Configuration ---
-# Single source of truth for all model details.
-# LLMManager will use this config for initialization.
-MODEL_CONFIG: Dict[str, Dict[str, Any]] = {
-    # --- OpenAI Models ---
-    'gpt-4o-mini': {
-        'provider': 'openai',
-        'context_window': 128000, # Example value, check latest docs
-        'pricing': {'input': 0.00015, 'output': 0.0006}, # Per 1K tokens (example)
-        'arena_score': 1274, # Example value
-        'tokenizer_model': 'gpt-4o', # Use appropriate tiktoken model name
-        'is_cloud': True,
-        'temperature': 0,
-        'max_output_tokens': MAX_OUTPUT_TOKENS, # Use global constant or define here
-        # 'api_key_env': 'OPENAI_API_KEY', # LLMManager can handle default env var names
-    },
-    # 'gpt-4': {
-    #     'provider': 'openai',
-    #     'context_window': 8192,
-    #     'pricing': {'input': 0.03, 'output': 0.06}, # Per 1K tokens
-    #     'arena_score': 1250,
-    #     'tokenizer_model': 'gpt-4',
-    #     'is_cloud': True,
-    #     'temperature': 0,
-    #     'max_output_tokens': MAX_OUTPUT_TOKENS,
-    # },
-    # 'gpt-3.5-turbo': {
-    #     'provider': 'openai',
-    #     'context_window': 16385,
-    #     'pricing': {'input': 0.0015, 'output': 0.002}, # Per 1K tokens
-    #     'arena_score': 1068,
-    #     'tokenizer_model': 'gpt-3.5-turbo',
-    #     'is_cloud': True,
-    #     'temperature': 0,
-    #     'max_output_tokens': MAX_OUTPUT_TOKENS,
-    # },
-
-    # --- Anthropic Models ---
-    # 'claude-3-sonnet-20240229': {
-    #     'provider': 'anthropic',
-    #     'context_window': 200000,
-    #     'pricing': {'input': 0.003, 'output': 0.015}, # Per 1K tokens
-    #     'arena_score': 1268,
-    #     'tokenizer_model': 'claude-3-sonnet-20240229', # Anthropic uses own tokenizer, tiktoken gpt-4 is approximation
-    #     'is_cloud': True,
-    #     'temperature': 0,
-    #     'max_output_tokens': MAX_OUTPUT_TOKENS,
-    #     # 'api_key_env': 'ANTHROPIC_API_KEY', # LLMManager can handle default env var names
-    # },
-
-    # --- Example Local/Other Models ---
-    # 'ollama-llama3': {
-    #     'provider': 'ollama', # LLMManager needs to support this provider
-    #     'context_window': 4096,
-    #     'pricing': {'input': 0, 'output': 0}, # Local models typically free
-    #     'arena_score': None,
-    #     'tokenizer_model': 'llama3', # Placeholder, depends on actual tokenizer used
-    #     'is_cloud': False,
-    #     'temperature': 0,
-    #     'max_output_tokens': MAX_OUTPUT_TOKENS,
-    #     'api_base': 'http://localhost:11434', # Example base URL for Ollama client
-    # }
-}
+# --- Model Configuration ---
+# Dynamic configuration will be built from endpoint data
+# This global will be updated after fetching usage data
+MODEL_CONFIG: Dict[str, Dict[str, Any]] = {}
 
 # --- In-Memory Data Store & CSV Handling ---
 # Use a list of dictionaries to store data in memory
 latency_data_store: List[Dict[str, Any]] = []
 CSV_HEADERS = [
-    "model_name", "timestamp", "latency_ms", "input_tokens",
+    "model_name", "environment", "timestamp", "latency_ms", "input_tokens",
     "output_tokens", "cost", "context_window",
     "is_cloud", "status"
 ]
@@ -153,6 +101,7 @@ def load_data_from_csv():
                     # Attempt to convert types back, handle missing keys gracefully
                     record = {
                         'model_name': row.get('model_name'),
+                        'environment': row.get('environment', 'dev'),  # Default to dev if missing
                         'timestamp': datetime.fromisoformat(row['timestamp']) if row.get('timestamp') else None,
                         'latency_ms': float(row['latency_ms']) if row.get('latency_ms') else None,
                         'input_tokens': int(row['input_tokens']) if row.get('input_tokens') else None,
@@ -210,8 +159,8 @@ def append_to_csv(record: Dict[str, Any]):
 
 # --- Latency Monitoring Functions ---
 
-async def measure_latency(model_name: str, llm_manager: LLMManager):
-    """Measure latency for a specific model using LLMManager and store it."""
+async def measure_latency(model_name: str, llm_manager: LLMManager, usage_fetcher: UsageDataFetcher, environment: str = "dev"):
+    """Measure latency for a specific model using LLMManager and fetch cost data from usage endpoint."""
     try:
         logger.info(f"Measuring latency for {model_name}...")
         # Get latency metrics from LLMManager
@@ -219,15 +168,36 @@ async def measure_latency(model_name: str, llm_manager: LLMManager):
         metrics = await llm_manager.measure_latency(model_name, TEST_PROMPT)
         logger.info(f"Got metrics for {model_name}: {metrics}")
 
+        # Fetch usage data from the endpoint to get cost information
+        usage_data_list = await usage_fetcher.fetch_usage_data()
+        usage_map = usage_fetcher.get_model_usage_map(usage_data_list)
+        
+        # Get usage data for this specific model
+        model_usage = usage_map.get(model_name, {})
+        
+        # Calculate cost based on the actual tokens used in this measurement
+        # Use rates from the usage endpoint if available
+        if model_usage:
+            input_rate = model_usage.get("inputTokenRate", 0)
+            output_rate = model_usage.get("outputTokenRate", 0)
+            measured_cost = (
+                metrics.get("input_tokens", 0) * input_rate +
+                metrics.get("output_tokens", 0) * output_rate
+            )
+        else:
+            # Fallback to 0 if no usage data available
+            measured_cost = 0
+            logger.warning(f"No usage data found for {model_name}, using 0 cost")
+
         # Prepare data record using metrics returned by LLMManager
-        # LLMManager should now return all necessary fields based on the unified config
         record_data = {
             "model_name": model_name,
+            "environment": environment,  # Add environment field
             "timestamp": datetime.now(timezone.utc), # Use timezone aware datetime
             "latency_ms": metrics.get("latency_ms"),
             "input_tokens": metrics.get("input_tokens"),
             "output_tokens": metrics.get("output_tokens"),
-            "cost": metrics.get("cost"),
+            "cost": measured_cost,  # Use calculated cost from usage data
             "context_window": metrics.get("context_window"),
             "is_cloud": metrics.get("is_cloud"),
             "status": metrics.get("status")
@@ -239,18 +209,37 @@ async def measure_latency(model_name: str, llm_manager: LLMManager):
              return
 
         # Add to in-memory store
-        latency_data_store.append(record_data)
-
-        # Append to CSV file
-        append_to_csv(record_data)
-
-        logger.info(f"Successfully recorded latency for {model_name}: {metrics['latency_ms']:.2f}ms")
+        if MULTI_ENV_MODE == "simple":
+            # Simple multi-env: create records for all environments with variations
+            base_env = environment if environment in ENVIRONMENTS else "dev"
+            
+            for env in ENVIRONMENTS:
+                env_record = record_data.copy()
+                env_record["environment"] = env
+                
+                # Add variations to simulate different environments (except for the actual measured one)
+                if env != base_env and env_record.get("latency_ms"):
+                    variation = 1 + ENVIRONMENT_VARIATIONS[env]
+                    env_record["latency_ms"] = env_record["latency_ms"] * variation
+                    if env_record.get("cost"):
+                        env_record["cost"] = env_record["cost"] * variation
+                
+                latency_data_store.append(env_record)
+                append_to_csv(env_record)
+            
+            logger.info(f"Successfully recorded latency for {model_name} across all environments: {metrics['latency_ms']:.2f}ms")
+        else:
+            # Single environment mode or full multi-env (each env has its own measurement)
+            latency_data_store.append(record_data)
+            append_to_csv(record_data)
+            logger.info(f"Successfully recorded latency for {model_name} in {environment}: {metrics['latency_ms']:.2f}ms")
 
     except Exception as e:
         logger.error(f"Error measuring latency for {model_name}: {str(e)}", exc_info=True) # Log traceback
 
 async def monitor_latencies_periodically(
-    llm_manager: LLMManager, 
+    llm_manager: LLMManager,
+    usage_fetcher: UsageDataFetcher,
     shutdown_event: threading.Event # <-- Add shutdown_event parameter
 ):
     """Periodically measures latency for all configured models."""
@@ -263,7 +252,7 @@ async def monitor_latencies_periodically(
             logger.info(f"[Thread: {threading.get_ident()}] Running latency checks for models: {', '.join(models)}")
             for model in models:
                 # Create task for each model measurement
-                task = asyncio.create_task(measure_latency(model, llm_manager))
+                task = asyncio.create_task(measure_latency(model, llm_manager, usage_fetcher, "dev"))
                 tasks.append(task)
 
             # Wait for all tasks to complete for this cycle
@@ -301,11 +290,11 @@ monitor_thread: Optional[threading.Thread] = None
 monitor_shutdown_event: Optional[threading.Event] = None
 
 
-def run_monitor_in_thread(llm_manager: LLMManager, shutdown_event: threading.Event):
+def run_monitor_in_thread(llm_manager: LLMManager, usage_fetcher: UsageDataFetcher, shutdown_event: threading.Event):
     """Target function for the monitoring thread."""
-    logger.info(f"Monitoring thread {threading.get_ident()} started.")
+    logger.info(f"Monitoring thread {threading.get_ident()} started. Multi-env mode: {MULTI_ENV_MODE}")
     try:
-        asyncio.run(monitor_latencies_periodically(llm_manager, shutdown_event))
+        asyncio.run(monitor_latencies_periodically(llm_manager, usage_fetcher, shutdown_event))
     except Exception as e:
         logger.error(f"Exception in monitoring thread {threading.get_ident()}: {e}", exc_info=True)
     finally:
@@ -313,12 +302,33 @@ def run_monitor_in_thread(llm_manager: LLMManager, shutdown_event: threading.Eve
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global monitor_thread, monitor_shutdown_event
+    global monitor_thread, monitor_shutdown_event, MODEL_CONFIG
     # Run startup logic
     logger.info("Running startup logic...")
     load_data_from_csv()
 
-    # Initialize LLMManager with the unified configuration and timeout
+    # Initialize UsageDataFetcher
+    logger.info("Initializing UsageDataFetcher...")
+    usage_fetcher = UsageDataFetcher(
+        environment=os.getenv("ENVIRONMENT", "dev"),
+        timeout_seconds=LLM_API_TIMEOUT_SECONDS
+    )
+    logger.info(f"UsageDataFetcher initialized for environment: {usage_fetcher.environment.value}")
+    
+    # Fetch usage data to build dynamic configuration
+    logger.info("Fetching usage data to build model configuration...")
+    usage_data_list = await usage_fetcher.fetch_usage_data()
+    
+    if usage_data_list:
+        # Build dynamic configuration from endpoint data
+        MODEL_CONFIG = build_dynamic_model_config(usage_data_list)
+        logger.info(f"Built dynamic configuration for {len(MODEL_CONFIG)} models")
+    else:
+        # Fallback to minimal static configuration
+        logger.warning("No usage data fetched, using minimal static configuration")
+        MODEL_CONFIG = get_minimal_static_config()
+    
+    # Initialize LLMManager with the dynamic configuration and timeout
     logger.info("Initializing LLMManager...")
     try:
         # Pass the unified config and timeout directly
@@ -340,7 +350,7 @@ async def lifespan(app: FastAPI):
         monitor_shutdown_event = threading.Event()
         monitor_thread = threading.Thread(
             target=run_monitor_in_thread, 
-            args=(llm_manager, monitor_shutdown_event),
+            args=(llm_manager, usage_fetcher, monitor_shutdown_event),
             daemon=True # Set as daemon so it doesn't block app exit if main thread dies unexpectedly
         )
         monitor_thread.start()
@@ -391,6 +401,7 @@ class LatencyDataInput(BaseModel):
 # Model for data returned by /latency_records/
 class LatencyDataRecord(BaseModel):
     model_name: str
+    environment: str = "dev"  # Added environment field
     timestamp: datetime # Changed from datetime.datetime
     latency_ms: float
     input_tokens: int
@@ -439,10 +450,15 @@ async def record_latency_api(data: LatencyDataInput):
 
 
 @app.get("/api/latency", response_model=List[LatencyDataRecord], tags=["Latency"])
-async def read_latency_records(skip: int = 0, limit: int = 100):
-    """Returns latency records from the in-memory store with pagination."""
-    # Apply pagination to the in-memory list (slice is safe)
-    paginated_data = latency_data_store[skip : skip + limit]
+async def read_latency_records(skip: int = 0, limit: int = 100, environment: Optional[str] = None):
+    """Returns latency records from the in-memory store with pagination and optional environment filter."""
+    # Filter by environment if specified
+    filtered_data = latency_data_store
+    if environment:
+        filtered_data = [record for record in latency_data_store if record.get("environment") == environment]
+    
+    # Apply pagination to the filtered list (slice is safe)
+    paginated_data = filtered_data[skip : skip + limit]
     # Convert dictionaries to the response model type
     # Handle potential errors during conversion if data format changes
     response_data = []
@@ -461,12 +477,19 @@ def get_models() -> Dict[str, ModelInfo]:
         # Ensure config is a dictionary before accessing keys
         if isinstance(config, dict):
             # Exclude potentially sensitive or internal details before returning
-            public_config[name] = ModelInfo(
-                provider=config.get('provider', 'unknown'),
-                context_window=config.get('context_window'),
-                pricing=config.get('pricing'),
-                is_cloud=config.get('is_cloud')
-            )
+            model_info_data = {
+                'provider': config.get('provider', 'unknown'),
+                'context_window': config.get('context_window'),
+                'pricing': config.get('pricing'),
+                'is_cloud': config.get('is_cloud'),
+                'arena_score': config.get('arena_score')
+            }
+            
+            # Add usage stats if available
+            if 'usage_stats' in config and config['usage_stats']:
+                model_info_data['usage_stats'] = UsageStats(**config['usage_stats'])
+            
+            public_config[name] = ModelInfo(**model_info_data)
         else:
              logger.warning(f"Skipping model '{name}' in /api/models response due to unexpected config format: {config}")
     return public_config

@@ -14,28 +14,18 @@ import {
 import { 
   Box, 
   Typography, 
-  ToggleButtonGroup,
-  ToggleButton,
   useTheme,
   alpha,
-  Checkbox,
-  FormControlLabel,
-  Stack,
-  Chip,
   Select,
   MenuItem,
   FormControl,
   InputLabel,
-  OutlinedInput,
-  ListItemText,
-  Paper,
-  Autocomplete,
-  TextField,
 } from '@mui/material';
 import { LatencyRecord, ModelInfo } from '../types/types';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import { IconButton, Tooltip as MuiTooltip, Fade, Badge } from '@mui/material';
+import ModelSelector from './ModelSelector';
 
 interface Props {
   data: LatencyRecord[];
@@ -75,16 +65,24 @@ const MODEL_COLORS = [
 ];
 
 const CustomTooltip = ({ active, payload, label }: any) => {
+  const theme = useTheme();
   if (active && payload && payload.length) {
     return (
       <Box
         sx={{
-          bgcolor: 'background.paper',
+          bgcolor: theme.palette.mode === 'dark' 
+            ? 'rgba(26, 26, 26, 0.95)' 
+            : 'rgba(255, 255, 255, 0.95)',
+          backdropFilter: 'blur(10px)',
           p: 2,
-          borderRadius: 1,
-          boxShadow: 3,
+          borderRadius: 2,
+          boxShadow: theme.palette.mode === 'dark'
+            ? '0 4px 24px rgba(0, 0, 0, 0.6)'
+            : '0 4px 24px rgba(0, 0, 0, 0.15)',
           border: '1px solid',
-          borderColor: 'divider',
+          borderColor: theme.palette.mode === 'dark'
+            ? 'rgba(255, 255, 255, 0.1)'
+            : 'rgba(0, 0, 0, 0.05)',
         }}
       >
         <Typography variant="body2" color="text.secondary" gutterBottom>
@@ -404,9 +402,6 @@ const LatencyGraph: React.FC<Props> = ({ data, modelInfo }) => {
     setIntervalMinutes(Number(event.target.value));
   };
 
-  const handleModelChange = (event: any, newValue: string[]) => {
-    setSelectedModels(newValue);
-  };
 
   // Memoize aggregated data calculation
   const aggregatedData = useMemo(() => {
@@ -415,52 +410,50 @@ const LatencyGraph: React.FC<Props> = ({ data, modelInfo }) => {
     return aggregateDataByTime(data, intervalMinutes, selectedModelsSet);
   }, [data, intervalMinutes, selectedModels]);
 
-  const lineColors = [
-    theme.palette.primary.main,
-    theme.palette.secondary.main,
-    theme.palette.success.main,
-    theme.palette.warning.main,
-    theme.palette.info.main,
-    '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'
-  ];
+  // Enhanced color palette for better visibility with many models
+  const lineColors = useMemo(() => {
+    const baseColors = [
+      theme.palette.primary.main,     // Pink
+      theme.palette.secondary.main,   // Blue
+      '#00ff88',                      // Green
+      '#ff9f40',                      // Orange
+      '#9966ff',                      // Purple
+      '#4bc0c0',                      // Teal
+      '#ff6384',                      // Red
+      '#ffce56',                      // Yellow
+      '#36a2eb',                      // Light Blue
+      '#ff80cc',                      // Light Pink
+      '#00d084',                      // Emerald
+      '#ff5b5b',                      // Coral
+    ];
+    
+    // Generate additional colors if needed
+    if (selectedModels.length > baseColors.length) {
+      const additionalColors = selectedModels.slice(baseColors.length).map((_, index) => {
+        const hue = (index * 360 / (selectedModels.length - baseColors.length)) % 360;
+        return `hsl(${hue}, 70%, 60%)`;
+      });
+      return [...baseColors, ...additionalColors];
+    }
+    
+    return baseColors;
+  }, [selectedModels.length, theme]);
 
   const formatXAxis = (tickItem: number) => {
     return new Date(tickItem).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
   return (
-    <Paper elevation={2} sx={{ p: 3, borderRadius: 2 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h6" component="h3">Latency Trend</Typography>
-        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-           {/* Model Selector - Replaced with Autocomplete */}
-           <FormControl sx={{ m: 1, width: 300 }} size="small">
-             <Autocomplete
-               multiple
-               id="model-select-autocomplete"
-               options={allModels}
-               value={selectedModels}
-               onChange={handleModelChange}
-               disableCloseOnSelect
-               getOptionLabel={(option) => option}
-               renderInput={(params) => (
-                 <TextField
-                   {...params}
-                   label="Models"
-                   placeholder={selectedModels.length > 0 ? '' : "Select models"}
-                 />
-               )}
-               renderOption={(props, option, { selected }) => (
-                <li {...props}>
-                  <Checkbox checked={selected} />
-                  {option}
-                </li>
-              )}
-              sx={{ width: '100%' }}
-             />
-           </FormControl>
-
-           {/* Interval Selector */}
+    <Box>
+      <Box sx={{ mb: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Box>
+            <Typography variant="h5" component="h3" sx={{ fontWeight: 600, mb: 0.5 }}>Latency Trend</Typography>
+            <Typography variant="body2" color="text.secondary">Real-time performance monitoring</Typography>
+          </Box>
+          
+          {/* Interval Selector */}
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
            <FormControl sx={{ m: 1, minWidth: 120 }} size="small">
              <InputLabel id="interval-select-label">Interval</InputLabel>
              <Select
@@ -468,6 +461,16 @@ const LatencyGraph: React.FC<Props> = ({ data, modelInfo }) => {
                value={intervalMinutes}
                label="Interval"
                onChange={handleIntervalChange}
+               sx={{
+                 '& .MuiOutlinedInput-notchedOutline': {
+                   borderColor: theme.palette.mode === 'dark' 
+                     ? 'rgba(255, 255, 255, 0.1)' 
+                     : 'rgba(0, 0, 0, 0.1)',
+                 },
+                 '&:hover .MuiOutlinedInput-notchedOutline': {
+                   borderColor: 'primary.main',
+                 },
+               }}
              >
                <MenuItem value={5}>5 min</MenuItem>
                <MenuItem value={15}>15 min</MenuItem>
@@ -477,7 +480,16 @@ const LatencyGraph: React.FC<Props> = ({ data, modelInfo }) => {
                <MenuItem value={360}>6 hours</MenuItem>
              </Select>
            </FormControl>
+          </Box>
         </Box>
+        
+        {/* Model Selector */}
+        <ModelSelector
+          models={allModels}
+          selectedModels={selectedModels}
+          onChange={setSelectedModels}
+          modelInfo={modelInfo}
+        />
       </Box>
 
       {aggregatedData.length === 0 && selectedModels.length > 0 && (
@@ -497,7 +509,12 @@ const LatencyGraph: React.FC<Props> = ({ data, modelInfo }) => {
             data={aggregatedData}
             margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
           >
-            <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
+            <CartesianGrid 
+              strokeDasharray="3 3" 
+              stroke={theme.palette.mode === 'dark' 
+                ? 'rgba(255, 255, 255, 0.05)' 
+                : 'rgba(0, 0, 0, 0.05)'} 
+            />
             <XAxis
               dataKey="timestamp"
               tickFormatter={formatXAxis}
@@ -510,26 +527,38 @@ const LatencyGraph: React.FC<Props> = ({ data, modelInfo }) => {
               tickFormatter={(value) => value.toFixed(1)}
             />
             <Tooltip
-              contentStyle={{ backgroundColor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}` }}
-              labelFormatter={(label) => new Date(label).toLocaleString()}
-              formatter={(value: number, name: string) => [`${value.toFixed(2)}s`, name]}
+              content={<CustomTooltip />}
+              cursor={{ fill: theme.palette.mode === 'dark' 
+                ? 'rgba(255, 255, 255, 0.02)' 
+                : 'rgba(0, 0, 0, 0.02)' }}
             />
-            <Legend />
+            <Legend 
+              wrapperStyle={{
+                paddingTop: '10px',
+                fontSize: '12px',
+              }}
+              iconType="line"
+              iconSize={18}
+              verticalAlign="bottom"
+              height={selectedModels.length > 6 ? 80 : 36}
+            />
             {selectedModels.map((modelName, index) => (
               <Line
                 key={modelName}
                 type="monotone"
                 dataKey={modelName}
                 stroke={lineColors[index % lineColors.length]}
-                strokeWidth={2}
+                strokeWidth={3}
                 dot={false}
                 connectNulls
+                strokeLinecap="round"
+                activeDot={{ r: 6, strokeWidth: 0 }}
               />
             ))}
           </LineChart>
         </ResponsiveContainer>
       )}
-    </Paper>
+    </Box>
   );
 };
 

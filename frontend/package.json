@@ -51,5 +51,5 @@
     "@types/testing-library__jest-dom": "^5.14.9",
     "typescript": "^4.9.5"
   },
-  "proxy": "http://localhost:8001"
+  "proxy": "http://localhost:8000"
 }

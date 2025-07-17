@@ -1,3 +1,5 @@
+export type Environment = 'dev' | 'test' | 'qa' | 'prod';
+
 export interface LatencyRecord {
   model_name: string;
   timestamp: string;
@@ -8,21 +10,27 @@ export interface LatencyRecord {
   context_window: number | null;
   is_cloud: boolean;
   status: string;
+  environment?: Environment;
 }
 
 export interface ModelInfo {
-  pricing_per_1k: {
+  provider: string;
+  context_window?: number | null;
+  pricing?: {
     input: number;
     output: number;
-  };
-  context_window: number;
-  training_data: string;
-  capabilities: {
-    vision: boolean;
-    streaming: boolean;
-    function_calling: boolean;
-  };
+  } | null;
   is_cloud?: boolean | null;
+  arena_score?: number | null;
+  usage_stats?: {
+    daily_cost: number;
+    daily_input_tokens: number;
+    daily_output_tokens: number;
+    daily_prompts: number;
+    monthly_avg_cost: number;
+    monthly_avg_input_tokens: number;
+    monthly_avg_output_tokens: number;
+  } | null;
 }
 
 export {};

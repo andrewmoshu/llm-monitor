@@ -15,17 +15,24 @@ import {
   IconButton,
   Chip,
   Divider,
+  InputBase,
+  Button,
+  alpha,
+  Fade,
+  Slide,
+  Skeleton,
+  Grow,
+  keyframes,
 } from '@mui/material';
-import Brightness4Icon from '@mui/icons-material/Brightness4';
-import Brightness7Icon from '@mui/icons-material/Brightness7';
 import SpeedIcon from '@mui/icons-material/Speed';
-import QueryStatsIcon from '@mui/icons-material/QueryStats';
+import SearchIcon from '@mui/icons-material/Search';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import LatencyGraph from './components/LatencyGraph';
 import LatencyTable from './components/LatencyTable';
+import EnvironmentSwitcher from './components/EnvironmentSwitcherModern';
 import { api } from './api';
-import { LatencyRecord, ModelInfo } from './types/types';
+import { LatencyRecord, ModelInfo, Environment } from './types/types';
 import './App.css';
-import StatCard from './components/StatCard';
 
 const API_BASE = 'http://localhost:8000/api';
 
@@ -34,39 +41,111 @@ const MONITOR_INTERVAL_MS = 60 * 1000;
 // Tolerance window around the latest timestamp (e.g., half the interval)
 const TIMESTAMP_TOLERANCE_MS = MONITOR_INTERVAL_MS / 2;
 
+// Beautiful keyframe animations
+const shimmer = keyframes`
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+`;
+
+const pulse = keyframes`
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+`;
+
+const float = keyframes`
+  0% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+  100% {
+    transform: translateY(0px);
+  }
+`;
+
+const glow = keyframes`
+  0% {
+    box-shadow: 0 0 5px rgba(255, 77, 166, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(255, 77, 166, 0.8), 0 0 40px rgba(255, 77, 166, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 5px rgba(255, 77, 166, 0.5);
+  }
+`;
+
 function App() {
   const [latencyData, setLatencyData] = useState<LatencyRecord[]>([]);
   const [modelInfo, setModelInfo] = useState<{ [key: string]: ModelInfo }>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [darkMode, setDarkMode] = useState(false);
+  const darkMode = true; // Always use dark mode
+  const [currentEnvironment, setCurrentEnvironment] = useState<Environment>('dev');
+  const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
 
   const theme = createTheme({
     palette: {
-      mode: darkMode ? 'dark' : 'light',
+      mode: 'dark',
       primary: {
-        main: '#2196f3',
+        main: '#ff4da6',
+        light: '#ff80cc',
+        dark: '#cc0066',
       },
       secondary: {
-        main: '#f50057',
+        main: '#00bfff',
+        light: '#66d9ff',
+        dark: '#0099cc',
       },
       background: {
-        default: darkMode ? '#0a1929' : '#f5f5f7',
-        paper: darkMode ? '#0d2339' : '#ffffff',
+        default: darkMode ? '#0a0a0a' : '#f5f5f7',
+        paper: darkMode ? '#1a1a1a' : '#ffffff',
+      },
+      text: {
+        primary: darkMode ? '#ffffff' : '#000000',
+        secondary: darkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.6)',
       },
     },
     shape: {
-      borderRadius: 12,
+      borderRadius: 16,
     },
     components: {
       MuiPaper: {
         styleOverrides: {
           root: {
-            backgroundImage: 'none',
+            backgroundImage: darkMode 
+              ? 'linear-gradient(to bottom right, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02))'
+              : 'none',
+            backdropFilter: darkMode ? 'blur(20px)' : 'none',
+            border: darkMode ? '1px solid rgba(255, 255, 255, 0.1)' : 'none',
             boxShadow: darkMode 
-              ? '0 4px 6px rgba(0, 0, 0, 0.2)'
-              : '0 4px 6px rgba(0, 0, 0, 0.05)',
+              ? '0 4px 12px rgba(0, 0, 0, 0.2)'
+              : '0 2px 8px rgba(0, 0, 0, 0.05)',
+          },
+        },
+      },
+      MuiButton: {
+        styleOverrides: {
+          root: {
+            textTransform: 'none',
+            fontWeight: 600,
+            borderRadius: 8,
           },
         },
       },
@@ -74,18 +153,25 @@ function App() {
   });
 
   useEffect(() => {
-    const fetchData = async (isInitialLoad = false) => {
+    const fetchData = async (isInitialLoad = false, isEnvironmentChange = false) => {
       if (isInitialLoad) {
         setLoading(true);
+      } else if (isEnvironmentChange) {
+        setIsTransitioning(true);
       } else {
         setIsRefreshing(true);
       }
       setError(null);
 
       try {
+        // Add a small delay for environment changes to make the transition smoother
+        if (isEnvironmentChange) {
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+
         const [latencyJson, modelsJson] = await Promise.all([
-          api.getLatencyData(),
-          api.getModels()
+          api.getLatencyData(currentEnvironment),
+          api.getModels(currentEnvironment)
         ]);
 
         console.log("Fetched Latency Data:", latencyJson);
@@ -104,73 +190,21 @@ function App() {
       } finally {
         setLoading(false);
         setIsRefreshing(false);
+        if (isEnvironmentChange) {
+          setTimeout(() => setIsTransitioning(false), 100);
+        }
       }
     };
 
-    fetchData(true);
-    const intervalId = setInterval(() => fetchData(false), MONITOR_INTERVAL_MS);
+    // Check if this is an environment change (not initial load)
+    const isEnvironmentChange = latencyData.length > 0 && !loading;
+    
+    fetchData(!latencyData.length, isEnvironmentChange);
+    const intervalId = setInterval(() => fetchData(false, false), MONITOR_INTERVAL_MS);
 
     return () => clearInterval(intervalId);
-  }, []);
+  }, [currentEnvironment]);
 
-  const calculateStats = (data: LatencyRecord[]) => {
-    if (!data || data.length === 0) {
-      return { cloudLatency: 0, onPremLatency: 0, monitoredInLastCycleCount: 0, uniqueModelCount: 0 };
-    }
-
-    // Calculate unique model count
-    const uniqueModelNames = new Set(data.map(d => d.model_name));
-    const uniqueModelCount = uniqueModelNames.size;
-
-    const validLatencyRecords = data.filter(d => d.latency_ms !== null && d.latency_ms >= 0);
-    const cloudRecords = validLatencyRecords.filter(d => d.is_cloud);
-    const cloudLatency = cloudRecords.length
-      ? cloudRecords.reduce((sum, d) => sum + (d.latency_ms ?? 0), 0) / cloudRecords.length
-      : 0;
-
-    const onPremRecords = validLatencyRecords.filter(d => !d.is_cloud);
-    const onPremLatency = onPremRecords.length
-      ? onPremRecords.reduce((sum, d) => sum + (d.latency_ms ?? 0), 0) / onPremRecords.length
-      : 0;
-
-    let monitoredInLastCycleCount = 0;
-    try {
-        // 1. Find the absolute latest timestamp (as epoch milliseconds)
-        const maxTimestampEpoch = Math.max(...data.map(r => new Date(r.timestamp).getTime()));
-
-        // 2. Find the latest timestamp for each model
-        const latestTimestampPerModel = new Map<string, number>();
-        data.forEach(record => {
-            const modelName = record.model_name;
-            const recordTimestampEpoch = new Date(record.timestamp).getTime();
-            if (!latestTimestampPerModel.has(modelName) || recordTimestampEpoch > (latestTimestampPerModel.get(modelName) ?? 0)) {
-                latestTimestampPerModel.set(modelName, recordTimestampEpoch);
-            }
-        });
-
-        // 3. Count models whose latest timestamp is within the tolerance window
-        latestTimestampPerModel.forEach((modelTimestampEpoch) => {
-            if (maxTimestampEpoch - modelTimestampEpoch <= TIMESTAMP_TOLERANCE_MS) {
-                monitoredInLastCycleCount++;
-            }
-        });
-         console.log(`Max Timestamp: ${new Date(maxTimestampEpoch).toISOString()}, Models in last cycle: ${monitoredInLastCycleCount}`);
-
-    } catch (e) {
-        console.error("Error calculating last monitored count:", e);
-        // Fallback or default value if calculation fails
-        monitoredInLastCycleCount = 0; // Or maybe use the previous method as fallback?
-    }
-
-    return {
-      cloudLatency: cloudLatency / 1000, // Convert ms to s
-      onPremLatency: onPremLatency / 1000, // Convert ms to s
-      monitoredInLastCycleCount: monitoredInLastCycleCount, // Use the new count
-      uniqueModelCount: uniqueModelCount
-    };
-  };
-
-  const stats = calculateStats(latencyData);
 
   if (loading) return (
     <ThemeProvider theme={theme}>
@@ -202,83 +236,276 @@ function App() {
       <Box sx={{ 
         minHeight: '100vh',
         bgcolor: 'background.default',
-        pb: 4
+        pb: 4,
+        background: 'linear-gradient(135deg, #0a0a0a 0%, #1a0a1a 50%, #0a0a1a 100%)'
       }}>
         <AppBar 
           position="static" 
           color="transparent" 
           elevation={0}
           sx={{ 
-            backdropFilter: 'blur(10px)',
-            borderBottom: '1px solid',
-            borderColor: 'divider',
+            background: 'transparent',
+            boxShadow: 'none',
+            border: 'none',
+            '&::before': {
+              display: 'none',
+            },
           }}
         >
-          <Toolbar>
-            <SpeedIcon sx={{ mr: 2, color: 'primary.main' }} />
-            <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 600 }}>
-              LLM Performance Monitor
-            </Typography>
-            {isRefreshing && <CircularProgress size={24} color="inherit" sx={{ mr: 2 }} />}
-            <IconButton onClick={() => setDarkMode(!darkMode)} color="inherit">
-              {darkMode ? <Brightness7Icon /> : <Brightness4Icon />}
-            </IconButton>
+          <Toolbar sx={{ py: 2, px: { xs: 2, sm: 3, md: 4 } }}>
+            <Box sx={{ 
+              display: 'flex', 
+              alignItems: 'center',
+              mr: 2,
+            }}>
+              <SpeedIcon sx={{ 
+                color: 'primary.main', 
+                fontSize: 32,
+              }} />
+            </Box>
+            
+            <Box sx={{ flexGrow: 1 }}>
+              <Typography 
+                variant="h5" 
+                component="div" 
+                sx={{ 
+                  fontWeight: 700,
+                  color: 'white',
+                  letterSpacing: '-0.5px',
+                }}
+              >
+                LLM Performance Monitor
+              </Typography>
+              <Typography 
+                variant="caption" 
+                sx={{ 
+                  color: 'text.secondary',
+                  display: 'block',
+                  mt: -0.5,
+                  opacity: 0.8,
+                }}
+              >
+                Real-time model analytics and monitoring
+              </Typography>
+            </Box>
+            
+            <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 3 }}>
+              <EnvironmentSwitcher 
+                currentEnvironment={currentEnvironment}
+                onEnvironmentChange={setCurrentEnvironment}
+              />
+              
+              {isRefreshing && (
+                <Box sx={{ 
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                }}>
+                  <CircularProgress 
+                    size={20} 
+                    thickness={5}
+                    sx={{ 
+                      color: 'primary.main',
+                      '& .MuiCircularProgress-circle': {
+                        strokeLinecap: 'round',
+                      },
+                    }} 
+                  />
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    Updating...
+                  </Typography>
+                </Box>
+              )}
+            </Box>
           </Toolbar>
         </AppBar>
 
         <Container maxWidth="xl" sx={{ mt: 4 }}>
-          {/* Stats Overview */}
-          <Grid container spacing={3} sx={{ mb: 4 }}>
-            <Grid item xs={12} md={4}>
-              <Paper sx={{ p: 3, height: '100%' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                  <QueryStatsIcon sx={{ color: 'primary.main', mr: 1 }} />
-                  <Typography variant="h6" sx={{ fontWeight: 500 }}>Models Monitored</Typography>
-                </Box>
-                <Typography variant="h3" sx={{ fontWeight: 600 }}>
-                  {stats.uniqueModelCount}
-                </Typography>
-              </Paper>
+          {/* Environment Indicator */}
+          <Box sx={{ 
+            mb: 3,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            perspective: '1000px',
+          }}>
+            <Box sx={{
+              position: 'relative',
+              px: 2,
+              py: 0.5,
+              borderRadius: 2,
+              background: currentEnvironment === 'prod' 
+                ? 'linear-gradient(135deg, #f44336 0%, #ff6b6b 100%)'
+                : currentEnvironment === 'qa'
+                ? 'linear-gradient(135deg, #ff9800 0%, #ffc947 100%)'
+                : currentEnvironment === 'test'
+                ? 'linear-gradient(135deg, #2196f3 0%, #64b5f6 100%)'
+                : 'linear-gradient(135deg, #4caf50 0%, #81c784 100%)',
+              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+              transition: 'opacity 0.2s ease',
+              opacity: isTransitioning ? 0.7 : 1,
+            }}>
+              <Typography variant="caption" sx={{ 
+                color: 'white',
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                letterSpacing: '1px',
+                fontSize: '0.7rem',
+                position: 'relative',
+                zIndex: 1,
+              }}>
+                {currentEnvironment} Environment
+              </Typography>
+            </Box>
+            <Fade in={!isTransitioning} timeout={300}>
+              <Typography variant="body2" sx={{ 
+                color: 'text.secondary',
+                opacity: isTransitioning ? 0 : 1,
+                transition: 'all 0.3s ease',
+              }}>
+                Monitoring {Object.keys(modelInfo).length} models
+              </Typography>
+            </Fade>
+          </Box>
+          
+          <Box sx={{ position: 'relative' }}>
+            <Grid container spacing={3}>
+              <Grid item xs={12}>
+                <Fade in={!isTransitioning} timeout={300} style={{ transitionDelay: isTransitioning ? '0ms' : '50ms' }}>
+                  <Paper 
+                    sx={{ 
+                      p: 3,
+                      position: 'relative',
+                      background: darkMode 
+                        ? 'rgba(26, 26, 26, 0.6)'
+                        : 'rgba(255, 255, 255, 0.9)',
+                      backdropFilter: 'blur(20px)',
+                      border: '1px solid',
+                      borderColor: darkMode 
+                        ? 'rgba(255, 255, 255, 0.1)' 
+                        : 'rgba(0, 0, 0, 0.05)',
+                      boxShadow: darkMode
+                        ? '0 4px 12px rgba(0, 0, 0, 0.2)'
+                        : '0 2px 8px rgba(0, 0, 0, 0.05)',
+                      opacity: isTransitioning ? 0.7 : 1,
+                      transition: 'opacity 0.2s ease',
+                      overflow: 'hidden',
+                      '&::before': {
+                        content: '""',
+                        position: 'absolute',
+                        top: 0,
+                        left: '-100%',
+                        width: '100%',
+                        height: '100%',
+                        background: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent)',
+                        animation: isTransitioning ? 'none' : `${shimmer} 3s ease-in-out infinite`,
+                      },
+                      '&:hover': {
+                        boxShadow: darkMode
+                          ? '0 6px 16px rgba(0, 0, 0, 0.3)'
+                          : '0 4px 12px rgba(0, 0, 0, 0.08)',
+                      }
+                    }}
+                  >
+                    {isTransitioning ? (
+                      <Box>
+                        <Skeleton 
+                          variant="text" 
+                          width="40%" 
+                          height={32} 
+                          sx={{ 
+                            mb: 2,
+                            background: 'linear-gradient(90deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 100%)',
+                            backgroundSize: '200% 100%',
+                            animation: `${shimmer} 1.5s ease-in-out infinite`,
+                          }} 
+                        />
+                        <Skeleton 
+                          variant="rectangular" 
+                          height={400} 
+                          sx={{ 
+                            borderRadius: 2,
+                            background: 'linear-gradient(90deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 100%)',
+                            backgroundSize: '200% 100%',
+                            animation: `${shimmer} 1.5s ease-in-out infinite`,
+                          }} 
+                        />
+                      </Box>
+                    ) : (
+                      <LatencyGraph data={latencyData} modelInfo={modelInfo} />
+                    )}
+                  </Paper>
+                </Fade>
+              </Grid>
+              <Grid item xs={12}>
+                <Fade in={!isTransitioning} timeout={300} style={{ transitionDelay: isTransitioning ? '0ms' : '100ms' }}>
+                  <Paper 
+                    sx={{ 
+                      p: 3,
+                      position: 'relative',
+                      background: darkMode 
+                        ? 'rgba(26, 26, 26, 0.6)'
+                        : 'rgba(255, 255, 255, 0.9)',
+                      backdropFilter: 'blur(20px)',
+                      border: '1px solid',
+                      borderColor: darkMode 
+                        ? 'rgba(255, 255, 255, 0.1)' 
+                        : 'rgba(0, 0, 0, 0.05)',
+                      boxShadow: darkMode
+                        ? '0 4px 12px rgba(0, 0, 0, 0.2)'
+                        : '0 2px 8px rgba(0, 0, 0, 0.05)',
+                      opacity: isTransitioning ? 0.7 : 1,
+                      transition: 'opacity 0.2s ease 0.1s',
+                      overflow: 'hidden',
+                      '&::before': {
+                        content: '""',
+                        position: 'absolute',
+                        top: 0,
+                        right: '-100%',
+                        width: '100%',
+                        height: '100%',
+                        background: 'linear-gradient(-90deg, transparent, rgba(255, 255, 255, 0.08), transparent)',
+                        animation: isTransitioning ? 'none' : `${shimmer} 3s ease-in-out infinite 1.5s`,
+                      },
+                      '&:hover': {
+                        boxShadow: darkMode
+                          ? '0 6px 16px rgba(0, 0, 0, 0.3)'
+                          : '0 4px 12px rgba(0, 0, 0, 0.08)',
+                      }
+                    }}
+                  >
+                    {isTransitioning ? (
+                      <Box>
+                        <Skeleton 
+                          variant="text" 
+                          width="30%" 
+                          height={32} 
+                          sx={{ 
+                            mb: 2,
+                            background: 'linear-gradient(90deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 100%)',
+                            backgroundSize: '200% 100%',
+                            animation: `${shimmer} 1.5s ease-in-out infinite`,
+                          }}
+                        />
+                        <Skeleton 
+                          variant="rectangular" 
+                          height={300} 
+                          sx={{ 
+                            borderRadius: 2,
+                            background: 'linear-gradient(90deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 100%)',
+                            backgroundSize: '200% 100%',
+                            animation: `${shimmer} 1.5s ease-in-out infinite`,
+                          }}
+                        />
+                      </Box>
+                    ) : (
+                      <LatencyTable data={latencyData} modelInfo={modelInfo} />
+                    )}
+                  </Paper>
+                </Fade>
+              </Grid>
             </Grid>
-            <Grid item xs={12} md={4}>
-              <Paper sx={{ p: 3, height: '100%' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                  <SpeedIcon sx={{ color: 'warning.main', mr: 1 }} />
-                  <Typography variant="h6" sx={{ fontWeight: 500 }}>Cloud Latency</Typography>
-                </Box>
-                <Typography variant="h3" sx={{ fontWeight: 600 }}>
-                  {stats.cloudLatency.toFixed(2)}
-                  <Typography component="span" variant="h6" color="text.secondary"> s</Typography>
-                </Typography>
-              </Paper>
-            </Grid>
-            <Grid item xs={12} md={4}>
-              <Paper sx={{ p: 3, height: '100%' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                  <SpeedIcon sx={{ color: 'success.main', mr: 1 }} />
-                  <Typography variant="h6" sx={{ fontWeight: 500 }}>On-Prem Latency</Typography>
-                </Box>
-                <Typography variant="h3" sx={{ fontWeight: 600 }}>
-                  {stats.onPremLatency.toFixed(2)}
-                  <Typography component="span" variant="h6" color="text.secondary"> s</Typography>
-                </Typography>
-              </Paper>
-            </Grid>
-          </Grid>
-
-          {/* Main Content */}
-          <Grid container spacing={3}>
-            <Grid item xs={12}>
-              <Paper sx={{ p: 3 }}>
-                <LatencyGraph data={latencyData} modelInfo={modelInfo} />
-              </Paper>
-            </Grid>
-            <Grid item xs={12}>
-              <Paper sx={{ p: 3 }}>
-                <LatencyTable data={latencyData} modelInfo={modelInfo} />
-              </Paper>
-            </Grid>
-          </Grid>
+          </Box>
         </Container>
       </Box>
     </ThemeProvider>
